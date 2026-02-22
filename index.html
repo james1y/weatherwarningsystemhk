@@ -3,15 +3,18 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="initial-scale=1, maximum-scale=1, user-scalable=no">
-  <title>Live Radar Map</title>
+  <title>HK Weather Warning System</title>
   <style>
-    html, body, #viewDiv {
-      padding: 0;
-      margin: 0;
-      height: 100%;
-      width: 100%;
+    html, body, #viewDiv { padding: 0; margin: 0; height: 100%; width: 100%; }
+    /* Style for the Warning Box */
+    #warningBox {
+      position: absolute; top: 20px; right: 20px; padding: 15px;
+      background: rgba(0, 0, 0, 0.75); color: white; border-radius: 8px;
+      font-family: sans-serif; z-index: 100; max-width: 250px;
+      border: 1px solid #ffcc00;
     }
   </style>
+
   <link rel="stylesheet" href="https://js.arcgis.com/4.28/esri/themes/dark/main.css">
   <script src="https://js.arcgis.com/4.28/"></script>
 
@@ -19,66 +22,71 @@
     require([
       "esri/Map",
       "esri/views/MapView",
-      "esri/layers/WebTileLayer"
-    ], function(Map, MapView, WebTileLayer) {
+      "esri/layers/WebTileLayer",
+      "esri/layers/FeatureLayer"
+    ], function(Map, MapView, WebTileLayer, FeatureLayer) {
 
+      // 1. Create the Map centered on Hong Kong
       const map = new Map({
-        basemap: "dark-gray-vector" // Dark basemaps show radar well
+        basemap: "dark-gray-vector"
       });
 
       const view = new MapView({
         container: "viewDiv",
         map: map,
-        center: [-98, 38], // Center over the US (adjust as needed)
-        zoom: 4
+        center: [114.1772, 22.3027], // HK Coordinates
+        zoom: 10
       });
 
-      let radarLayer = null;
+      // 2. Add CSDI Layer (HK District Boundaries)
+      const districtLayer = new FeatureLayer({
+        url: "https://services6.arcgis.com/89S7Bbc8eK8666S1/arcgis/rest/services/Hong_Kong_District_Boundary/FeatureServer/0",
+        opacity: 0.4,
+        title: "HK Districts"
+      });
+      map.add(districtLayer);
 
-      // Function to fetch and update the radar layer
+      // 3. Radar Logic (RainViewer)
+      let radarLayer = null;
       async function updateRadar() {
         try {
-          // Fetch the RainViewer API endpoint
           const response = await fetch("https://api.rainviewer.com/public/weather-maps.json");
           const data = await response.json();
-
-          // Get the latest path from past radar frames
-          const pastFrames = data.radar.past;
-          const latestFrame = pastFrames[pastFrames.length - 1];
-          const latestPath = latestFrame.path;
-
-          // Construct the dynamic URL template
-          // RainViewer format: {host}{path}/256/{z}/{x}/{y}/2/1_1.png
+          const latestPath = data.radar.past[data.radar.past.length - 1].path;
           const urlTemplate = `${data.host}${latestPath}/256/{level}/{col}/{row}/2/1_1.png`;
 
-          // If a radar layer already exists, remove it before adding the new one
-          if (radarLayer) {
-            map.remove(radarLayer);
-          }
-
-          // Add the updated tile layer
-          radarLayer = new WebTileLayer({
-            urlTemplate: urlTemplate,
-            opacity: 0.7
-          });
-          
+          if (radarLayer) { map.remove(radarLayer); }
+          radarLayer = new WebTileLayer({ urlTemplate: urlTemplate, opacity: 0.65 });
           map.add(radarLayer);
-          console.log(`Radar updated for timestamp: ${new Date(latestFrame.time * 1000).toLocaleTimeString()}`);
-
-        } catch (error) {
-          console.error("Failed to load RainViewer data:", error);
-        }
+        } catch (e) { console.error("Radar Error:", e); }
       }
 
-      // 1. Initial load
-      updateRadar();
+      // 4. HK Observatory Warning Logic
+      async function updateWarnings() {
+        try {
+          const res = await fetch("https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=warnsum&lang=en");
+          const data = await res.json();
+          const box = document.getElementById("warningBox");
+          
+          if (Object.keys(data).length === 0) {
+            box.innerHTML = "<b>HKO Warnings:</b><br>No active warnings";
+          } else {
+            let warnings = Object.values(data).map(w => w.name).join("<br>");
+            box.innerHTML = `<b>⚠️ Active Warnings:</b><br>${warnings}`;
+          }
+        } catch (e) { console.error("HKO API Error:", e); }
+      }
 
-      // 2. Refresh every 10 minutes (600,000 milliseconds)
-      setInterval(updateRadar, 600000); 
+      // Initial Load and Timers
+      updateRadar();
+      updateWarnings();
+      setInterval(updateRadar, 600000); // Update radar every 10 mins
+      setInterval(updateWarnings, 60000); // Update warnings every 1 min
     });
   </script>
 </head>
 <body>
+  <div id="warningBox">Loading warnings...</div>
   <div id="viewDiv"></div>
 </body>
 </html>
