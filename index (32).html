@@ -1,0 +1,2287 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no">
+  <title>WeatherWarningHK | Hong Kong Hyper-Local Weather Warning</title>
+  <meta name="description" content="Real-time hyper-local rainfall time-of-arrival warning system for Hong Kong. Powered by HKO radar, CSDI Wi-Fi.HK and ArcGIS.">
+  <meta name="author" content="WeatherWarningHK">
+  <meta name="application-name" content="WeatherWarningHK">
+
+  <!-- ArcGIS Online embedding meta tags -->
+  <meta name="arcgis-item-type" content="Web Mapping Application">
+  <meta name="arcgis-item-keywords" content="weather,radar,nowcast,Hong Kong,GIS,Wi-Fi,TOA,rainfall">
+  <meta property="og:title" content="WeatherWarningHK — Hyper-Local Weather Warning">
+  <meta property="og:description" content="Hyper-local rainfall time-of-arrival warnings for every government Wi-Fi hotspot in Hong Kong.">
+  <meta property="og:type" content="website">
+  <meta name="theme-color" content="#f43a09">
+
+  <!-- ArcGIS JS 4.28 — defines global require() -->
+  <link rel="stylesheet" href="https://js.arcgis.com/4.28/esri/themes/light/main.css">
+  <script src="https://js.arcgis.com/4.28/"></script>
+
+  <!-- Typography: Plus Jakarta Sans (enterprise) + Bebas Neue (display) + JetBrains Mono (data) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&family=Bebas+Neue&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+<style>
+/* ═══════════════════════════════════════════════════════════════
+   WeatherWarningHK v20 — UNIFIED MAP · OPERATIONAL CONSOLE
+   ─────────────────────────────────────────────────────────────
+   Single map: CartoDB Positron + RainViewer Dark Sky (scheme 8)
+                + coloured Wi-Fi TOA dots together.
+   Grid: 52px topbar | map 1fr | 320px panel (no status bar)
+   Design principles:
+     • Threat level is the #1 visual element (topbar strip)
+     • TOA number is the hero in every spot card
+     • Dot size encodes urgency (14 / 9 / 5 px)
+     • Storm arrow communicates motion without a widget
+     • Echo card = meteorological detail, not primary UI
+═══════════════════════════════════════════════════════════════ */
+
+/* ── Design tokens ─────────────────────────────────────────── */
+:root {
+  --s0:#ffffff; --s1:#f8faf9; --s2:#eff5f1; --s3:#e4efea; --s4:#d5e8dc;
+  --b1:#ddeae2; --b2:#c4d8cc; --b3:#9cbdac;
+  --red:#f43a09; --red-dim:rgba(244,58,9,.07); --red-mid:rgba(244,58,9,.16); --red-bd:rgba(244,58,9,.32);
+  --amber:#ffb766; --amber-dim:rgba(255,183,102,.08); --amber-bd:rgba(255,183,102,.38);
+  --green:#68d388; --green-dim:rgba(104,211,136,.08); --green-bd:rgba(104,211,136,.36);
+  --blue:#3b82c4; --blue-dim:rgba(59,130,196,.08); --blue-mid:rgba(59,130,196,.14); --blue-bd:rgba(59,130,196,.32);
+  /* Status colours — chosen to never clash with RainViewer scheme 8 radar palette */
+  --sw:#e91e63;  --sw-dim:rgba(233,30,99,.07);  --sw-mid:rgba(233,30,99,.18);  --sw-bd:rgba(233,30,99,.38);
+  --sc:#ff9800;  --sc-dim:rgba(255,152,0,.07);  --sc-mid:rgba(255,152,0,.18);  --sc-bd:rgba(255,152,0,.38);
+  --ss:#00bfa5;  --ss-dim:rgba(0,191,165,.07);  --ss-mid:rgba(0,191,165,.18);  --ss-bd:rgba(0,191,165,.38);
+  --t0:#0a1a11; --t1:#1e3828; --t2:#3a6050; --t3:#6a9080; --t4:#9bbcac; --t5:#c0d8cc;
+  /* Backward compat */
+  --bg0:var(--s1);--bg1:var(--s0);--bg2:var(--s2);--bg3:var(--s3);
+  --border:var(--b1);--border-dk:var(--b3);
+  --orange:var(--red);--orange-lt:var(--red-dim);--orange-bd:var(--red-bd);
+  --caut:var(--amber);--caut-lt:var(--amber-dim);--caut-bd:var(--amber-bd);
+  --safe:var(--green);--safe-lt:var(--green-dim);--safe-bd:var(--green-bd);
+  --watch:var(--blue);--watch-lt:var(--blue-dim);--watch-bd:var(--blue-bd);
+  --tx0:var(--t0);--tx1:var(--t1);--tx2:var(--t2);--tx3:var(--t3);--tx4:var(--t4);
+  --f-dis:'Bebas Neue',sans-serif;
+  --f-bod:'Plus Jakarta Sans',system-ui,sans-serif;
+  --f-mon:'JetBrains Mono','Fira Mono',monospace;
+  --r3:3px;--r6:6px;--r10:10px;--r14:14px;
+  --sh1:0 1px 4px rgba(0,0,0,.06),0 2px 8px rgba(0,0,0,.04);
+  --sh2:0 2px 8px rgba(0,0,0,.08),0 4px 16px rgba(0,0,0,.06);
+  --sh3:0 4px 16px rgba(0,0,0,.10),0 8px 32px rgba(0,0,0,.08);
+  --ease:.16s cubic-bezier(.4,0,.2,1);
+  --ease-out:.22s cubic-bezier(0,0,.2,1);
+}
+
+/* ── Reset ──────────────────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+html,body{height:100%;overflow:hidden;background:var(--s1);font-family:var(--f-bod);color:var(--t0);font-size:13px;line-height:1.5;-webkit-font-smoothing:antialiased;}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important;}}
+
+/* ── App Grid: topbar | map+panel (no status bar) ─────────── */
+#app{display:grid;grid-template-columns:1fr 320px;grid-template-rows:52px 1fr;height:100vh;width:100vw;}
+
+/* ═══════════════════════════════════════════════════════════
+   TOPBAR — threat-level strip
+   State classes applied to #topbar by JS:
+     .state-clear   → green
+     .state-active  → amber
+     .state-warning → red (pulsing)
+═══════════════════════════════════════════════════════════ */
+#topbar{
+  grid-column:1/-1;grid-row:1;
+  display:flex;align-items:center;gap:0;
+  background:var(--s0);border-bottom:2px solid var(--b1);
+  z-index:1100;position:relative;overflow:hidden;
+  transition:border-color .3s ease,background .3s ease;
+}
+/* Left accent line — widens to full bar height on warning */
+#topbar::before{
+  content:'';position:absolute;left:0;top:0;bottom:0;width:4px;
+  background:var(--green);transition:width .4s ease,background .3s ease;
+  z-index:0;
+}
+#topbar.state-clear::before   {background:var(--green);width:4px;}
+#topbar.state-active::before  {background:var(--amber);width:4px;}
+#topbar.state-warning::before {
+  background:var(--sw);width:100%;opacity:.06;
+  animation:topbar-pulse 2s ease-in-out infinite;
+}
+@keyframes topbar-pulse{0%,100%{opacity:.05;}50%{opacity:.11;}}
+
+/* Alert banner — the hero element */
+#alert-banner{
+  flex:1;display:flex;align-items:center;gap:10px;
+  padding:0 18px 0 22px;position:relative;z-index:1;
+  min-width:0;
+}
+#alert-icon{font-size:18px;flex-shrink:0;line-height:1;}
+#alert-text{
+  font-size:13px;font-weight:700;color:var(--t1);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  letter-spacing:-.1px;transition:color .3s ease;
+}
+#topbar.state-clear   #alert-text{color:#1e7a3e;}
+#topbar.state-active  #alert-text{color:#b87200;}
+#topbar.state-warning #alert-text{color:var(--sw);}
+#alert-sub{
+  font-size:10px;color:var(--t4);margin-left:4px;
+  font-weight:500;white-space:nowrap;flex-shrink:0;
+}
+
+/* Brand — right-aligned, compact */
+.brand{display:flex;align-items:center;gap:10px;padding:0 16px;flex-shrink:0;border-left:1px solid var(--b1);}
+.brand-logo{width:30px;height:30px;border-radius:8px;flex-shrink:0;background:var(--t0);display:flex;align-items:center;justify-content:center;}
+.brand-logo svg{width:18px;height:18px;}
+.brand-name{font-family:var(--f-dis);font-size:17px;letter-spacing:2px;color:var(--t0);line-height:1;white-space:nowrap;}
+.brand-name span{color:var(--red);}
+.brand-divider{width:1px;height:24px;background:var(--b1);}
+
+/* Right controls */
+.t-right{display:flex;align-items:center;gap:6px;padding:0 14px;flex-shrink:0;}
+.t-btn{display:flex;align-items:center;gap:5px;padding:5px 10px;border-radius:6px;border:1px solid var(--b1);background:var(--s0);font-family:var(--f-bod);font-size:11px;font-weight:600;color:var(--t2);cursor:pointer;transition:var(--ease);white-space:nowrap;}
+.t-btn:hover{border-color:var(--b3);color:var(--t0);background:var(--s2);}
+#clk{font-family:var(--f-mon);font-size:11px;font-weight:500;color:var(--t3);min-width:58px;text-align:right;letter-spacing:.5px;}
+
+/* ═══════════════════════════════════════════════════════════
+   MAP AREA
+═══════════════════════════════════════════════════════════ */
+#map-wrap{grid-column:1;grid-row:2;position:relative;overflow:hidden;}
+#viewDiv{width:100%;height:100%;}
+.esri-attribution{display:none!important;}
+.esri-ui-bottom-right{bottom:20px!important;}
+.esri-widget--button{background:var(--s0)!important;color:var(--t1)!important;border:1px solid var(--b1)!important;box-shadow:var(--sh1)!important;}
+.esri-widget--button:hover{background:var(--s2)!important;color:var(--red)!important;border-color:var(--red-bd)!important;}
+
+/* ── Floating card base ─────────────────────────────────── */
+.mcard{
+  position:absolute;z-index:900;
+  background:rgba(255,255,255,.97);
+  border:1px solid var(--b1);border-radius:var(--r10);
+  backdrop-filter:blur(12px) saturate(180%);
+  -webkit-backdrop-filter:blur(12px) saturate(180%);
+  box-shadow:var(--sh2);
+}
+.mcard-hd{font-size:8px;font-weight:800;letter-spacing:2.5px;text-transform:uppercase;color:var(--t4);padding-bottom:8px;margin-bottom:8px;border-bottom:1px solid var(--b1);}
+
+/* Layer control — top right */
+#lc{top:12px;right:12px;padding:12px 14px;min-width:200px;}
+.lc-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;}
+.lc-row:last-of-type{margin-bottom:0;}
+.lc-lbl{font-size:12px;color:var(--t2);font-weight:600;}
+.tog{position:relative;width:32px;height:17px;flex-shrink:0;}
+.tog input{opacity:0;width:0;height:0;}
+.tog-tr{position:absolute;inset:0;cursor:pointer;background:var(--s3);border:1px solid var(--b2);border-radius:17px;transition:var(--ease);}
+.tog input:checked+.tog-tr{background:var(--green);border-color:var(--green);}
+.tog-tr::before{content:'';position:absolute;width:11px;height:11px;border-radius:50%;background:#fff;bottom:2px;left:2px;transition:var(--ease);box-shadow:0 1px 4px rgba(0,0,0,.18);}
+.tog input:checked+.tog-tr::before{transform:translateX(15px);}
+.sl-row{display:flex;align-items:center;gap:6px;margin-top:3px;padding-left:1px;}
+.sl-lbl{font-size:9px;color:var(--t4);width:46px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;}
+#opa-sl{-webkit-appearance:none;flex:1;height:3px;background:var(--s3);border-radius:3px;outline:none;cursor:pointer;}
+#opa-sl::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:var(--red);cursor:pointer;box-shadow:0 1px 4px rgba(244,58,9,.3);}
+#opa-val{font-family:var(--f-mon);font-size:9px;color:var(--t3);width:26px;text-align:right;}
+.lc-sep{height:1px;background:var(--b1);margin:9px 0;}
+/* Rainfall legend inside layer control */
+
+/* Echo motion — bottom left */
+#ec{bottom:24px;left:12px;padding:12px 14px;min-width:210px;}
+.cmp-row{display:flex;align-items:center;gap:10px;margin-bottom:10px;background:var(--s2);border-radius:var(--r6);padding:8px 10px;border:1px solid var(--b1);}
+.ec-row{display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid var(--s3);}
+.ec-row:last-of-type{border-bottom:none;}
+.ec-k{font-size:10px;color:var(--t3);font-weight:500;}
+.ec-v{font-family:var(--f-mon);font-size:11px;font-weight:500;}
+.c-jade{color:#1e7a3e;}.c-amb{color:#b87200;}.c-red{color:var(--red);}.c-mute{color:var(--t4);}
+.ec-bnr{margin-top:9px;padding:6px 9px;border-radius:var(--r6);font-size:11px;font-weight:700;text-align:center;letter-spacing:.2px;}
+.ec-bnr.clr{background:var(--green-dim);color:#1e7a3e;border:1px solid var(--green-bd);}
+.ec-bnr.act{background:var(--amber-dim);color:#b87200;border:1px solid var(--amber-bd);}
+.ec-bnr.dng{background:var(--sw-dim);color:var(--sw);border:1px solid var(--sw-bd);animation:ec-danger 2s ease-in-out infinite;}
+.ec-bnr.low-conf{border-style:dashed!important;opacity:.85;}
+@keyframes ec-danger{0%,100%{box-shadow:none;}50%{box-shadow:0 0 12px rgba(244,58,9,.15);}}
+
+/* Hotspot legend — bottom right */
+#leg{bottom:24px;right:12px;padding:11px 13px;pointer-events:none;}
+.leg-hd{font-size:8px;font-weight:800;letter-spacing:2px;text-transform:uppercase;color:var(--t4);margin-bottom:7px;}
+.leg-row{display:flex;align-items:center;gap:7px;margin-bottom:5px;}
+.leg-row:last-child{margin-bottom:0;}
+.leg-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
+.leg-lbl{font-size:10px;font-weight:600;}
+.leg-sep{height:1px;background:var(--b1);margin:7px 0;}
+
+/* Attribution */
+#attr{position:absolute;bottom:0;left:0;right:0;z-index:800;padding:2px 8px;font-size:9px;font-weight:500;color:var(--t4);background:rgba(255,255,255,.88);border-top:1px solid var(--b1);pointer-events:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+#attr a{color:var(--t4);text-decoration:none;}
+#attr a:hover{color:var(--red);}
+
+/* Storm arrow overlay */
+
+/* ── Selection pin ──────────────────────────────────────── */
+#sel-pin{position:absolute;z-index:920;pointer-events:none;display:none;}
+.sp-rings{position:absolute;transform:translate(-50%,-50%);width:0;height:0;}
+.sp-ring{position:absolute;border-radius:50%;border:2px solid;transform:translate(-50%,-50%);animation:sp-pulse 1.6s ease-out infinite;}
+.sp-ring:nth-child(2){animation-delay:.53s;}
+.sp-ring:nth-child(3){animation-delay:1.06s;}
+@keyframes sp-pulse{0%{width:12px;height:12px;opacity:1;}100%{width:60px;height:60px;opacity:0;}}
+.sp-dot{position:absolute;width:14px;height:14px;border-radius:50%;transform:translate(-50%,-50%);border:3px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.15),0 2px 8px rgba(0,0,0,.2);}
+.sp-label{position:absolute;bottom:16px;left:50%;transform:translateX(-50%);background:var(--s0);border-radius:6px;padding:5px 10px;white-space:nowrap;font-family:var(--f-bod);font-size:11px;font-weight:700;color:var(--t0);letter-spacing:-.1px;box-shadow:var(--sh2);border:1px solid var(--b1);max-width:200px;overflow:hidden;text-overflow:ellipsis;}
+.sp-label::after{content:'';position:absolute;top:100%;left:50%;transform:translateX(-50%);border:6px solid transparent;border-top-color:var(--s0);filter:drop-shadow(0 1px 1px rgba(0,0,0,.08));}
+
+/* ═══════════════════════════════════════════════════════════
+   POPUP CARD
+═══════════════════════════════════════════════════════════ */
+#popupCard{
+  position:absolute;bottom:30px;left:12px;z-index:950;
+  width:300px;max-height:calc(100vh - 90px);
+  background:var(--s0);border:1px solid var(--b1);
+  border-radius:var(--r14);box-shadow:var(--sh3);
+  display:none;animation:popup-in .2s var(--ease-out);
+  overflow-y:auto;overflow-x:hidden;
+  scrollbar-width:thin;scrollbar-color:var(--s3) transparent;
+}
+#popupCard::-webkit-scrollbar{width:3px;}
+#popupCard::-webkit-scrollbar-thumb{background:var(--s3);border-radius:3px;}
+@keyframes popup-in{from{opacity:0;transform:translateY(6px) scale(.98);}to{opacity:1;transform:translateY(0) scale(1);}}
+.pc-strip{height:4px;border-radius:var(--r14) var(--r14) 0 0;transition:background var(--ease);}
+.pc-strip.watch,.pc-strip.safe{background:var(--ss);}
+.pc-strip.caution{background:var(--sc);}
+.pc-strip.warning{background:var(--sw);}
+.pc-inner{padding:12px 14px 14px;}
+.pc-close{float:right;position:relative;z-index:2;background:var(--s2);border:1px solid var(--b1);border-radius:6px;width:22px;height:22px;display:flex;align-items:center;justify-content:center;color:var(--t3);font-size:11px;cursor:pointer;transition:var(--ease);margin-left:8px;}
+.pc-close:hover{background:var(--red);border-color:var(--red);color:#fff;}
+.pc-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:6px;}
+.pc-title{flex:1;min-width:0;}
+.pc-name{font-family:var(--f-dis);font-size:16px;letter-spacing:.3px;color:var(--t0);line-height:1.25;word-break:break-word;}
+.pc-name-alt{font-size:10px;color:var(--t3);line-height:1.4;margin-top:2px;font-weight:400;}
+.pc-badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:20px;font-size:9px;font-weight:800;margin-top:5px;letter-spacing:.5px;text-transform:uppercase;}
+/* TOA hero box — big and unmissable */
+.toa-bx{border-radius:var(--r10);padding:12px;text-align:center;border:1px solid;margin:8px 0 10px;}
+.toa-bx.watch,.toa-bx.safe{background:var(--ss-dim);border-color:var(--ss-bd);}
+.toa-bx.caution{background:rgba(255,152,0,.08);border-color:rgba(255,152,0,.25);}
+.toa-bx.warning{background:var(--sw-dim);border-color:var(--sw-bd);animation:ec-danger 2s ease-in-out infinite;}
+.toa-lb{font-size:8px;font-weight:800;letter-spacing:2.5px;text-transform:uppercase;color:var(--t3);margin-bottom:5px;}
+.toa-v{font-family:var(--f-dis);font-size:34px;letter-spacing:1px;line-height:1;margin-bottom:2px;}
+.toa-bx.watch .toa-v,.toa-bx.safe .toa-v{color:#007a6a;font-size:14px;font-family:var(--f-bod);font-weight:700;}
+.toa-bx.caution .toa-v{color:#c96000;}
+.toa-bx.warning .toa-v{color:var(--sw);}
+.toa-ht{font-size:11px;color:var(--t3);font-weight:600;}
+/* Stats 3-col */
+.pc-stats{display:flex;border:1px solid var(--b1);border-radius:var(--r6);overflow:hidden;margin-bottom:9px;background:var(--s2);}
+.pc-stat{flex:1;padding:7px 4px;text-align:center;}
+.pc-stat+.pc-stat{border-left:1px solid var(--b1);}
+.pc-stat .sv{font-family:var(--f-mon);font-size:11px;color:var(--red);display:block;font-weight:600;}
+.pc-stat .sl{font-size:8px;color:var(--t4);text-transform:uppercase;letter-spacing:.7px;margin-top:1px;display:block;}
+.pc-edge-row{display:flex;justify-content:space-between;align-items:center;padding:6px 10px;margin:0 -2px;background:var(--s2);border:1px solid var(--b1);border-radius:var(--r6);font-size:10px;margin-top:6px;}
+.pc-edge-k{color:var(--t4);font-weight:600;}
+.pc-edge-val{font-family:var(--f-mon);font-size:10px;font-weight:700;color:var(--t1);}
+/* Collapsible details toggle */
+.pc-details-toggle{display:flex;align-items:center;justify-content:space-between;padding:8px 0 4px;cursor:pointer;border-top:1px solid var(--s3);margin-top:8px;user-select:none;}
+.pc-details-toggle span{font-size:9px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;color:var(--t4);}
+.pc-details-toggle .pdt-arrow{font-size:9px;color:var(--t4);transition:transform .2s ease;}
+.pc-details-toggle.open .pdt-arrow{transform:rotate(180deg);}
+#pc-details{display:none;}
+#pc-details.open{display:block;}
+.pc-sec{font-size:9px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;color:var(--t4);padding:8px 12px 4px;background:var(--s2);border-top:1px solid var(--b1);}
+.pc-details>.pc-sec:first-child{border-top:none;}
+.pc-row{display:flex;align-items:flex-start;gap:7px;padding:4px 0;border-bottom:1px solid var(--s3);}
+.pc-row:last-child{border-bottom:none;}
+.pc-ri{font-size:11px;flex-shrink:0;width:18px;text-align:center;margin-top:1px;opacity:.75;}
+.pc-rk{font-size:9px;font-weight:700;color:var(--t4);min-width:58px;flex-shrink:0;text-transform:uppercase;letter-spacing:.5px;margin-top:2px;line-height:1.4;}
+.pc-rv{font-size:11px;color:var(--t1);line-height:1.5;word-break:break-word;flex:1;}
+/* Badge types */
+.b-park{background:rgba(104,211,136,.15);color:#1e7a3e;border:1px solid rgba(104,211,136,.35);}
+.b-lib{background:var(--blue-mid);color:#1e5a9e;border:1px solid var(--blue-bd);}
+.b-gov{background:rgba(150,70,240,.10);color:#6030b0;border:1px solid rgba(150,70,240,.28);}
+.b-hub{background:var(--amber-dim);color:#b87200;border:1px solid var(--amber-bd);}
+.b-other{background:var(--s3);color:var(--t3);border:1px solid var(--b2);}
+
+/* ═══════════════════════════════════════════════════════════
+   RIGHT PANEL
+═══════════════════════════════════════════════════════════ */
+#panel{grid-column:2;grid-row:2;background:var(--s0);border-left:1px solid var(--b1);display:flex;flex-direction:column;overflow:hidden;min-height:0;}
+.pnl-hd{padding:0;border-bottom:1px solid var(--b1);background:var(--s0);flex-shrink:0;}
+.pnl-hd-top{display:flex;align-items:center;justify-content:space-between;padding:10px 14px 8px;}
+.pnl-hd-title{font-size:13px;font-weight:700;color:var(--t0);letter-spacing:-.2px;}
+.pnl-hd-sub{font-size:10px;color:var(--t4);font-weight:500;}
+
+/* BIG STATS STRIP — warning count is the hero */
+.pnl-stats{display:grid;grid-template-columns:1fr 1fr 1fr;border-top:1px solid var(--b1);}
+.pnl-stat{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:10px 4px;border-right:1px solid var(--b1);}
+.pnl-stat:last-child{border-right:none;}
+.pnl-stat .ps-n{font-family:var(--f-dis);font-size:42px;line-height:1;letter-spacing:1px;}
+.pnl-stat .ps-l{font-size:8px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;color:var(--t4);margin-top:2px;}
+.pnl-stat.ps-warn .ps-n{color:var(--sw);}
+.pnl-stat.ps-caut .ps-n{color:var(--sc);}
+.pnl-stat.ps-safe .ps-n{color:var(--ss);}
+/* Warning count pulses when non-zero */
+.pnl-stat.ps-warn.has-warn .ps-n{animation:warn-count-pulse 2.5s ease-in-out infinite;}
+@keyframes warn-count-pulse{0%,100%{opacity:1;}50%{opacity:.6;}}
+
+/* Loading progress */
+#pp{padding:7px 12px;border-bottom:1px solid var(--b1);flex-shrink:0;background:var(--s2);}
+#pp.hidden{display:none;}
+#pp-txt{font-size:10px;font-weight:600;color:var(--t2);margin-bottom:5px;}
+.pp-track{height:2px;background:var(--s3);border-radius:2px;overflow:hidden;}
+.pp-fill{height:100%;width:0%;background:linear-gradient(90deg,var(--green),#3db864);border-radius:2px;transition:width .3s ease;}
+
+/* Search */
+.srch-wrap{padding:8px 10px;border-bottom:1px solid var(--b1);flex-shrink:0;}
+.srch-inner{display:flex;align-items:center;gap:6px;background:var(--s2);border:1px solid var(--b1);border-radius:var(--r6);padding:6px 9px;transition:var(--ease);}
+.srch-inner:focus-within{border-color:var(--red-bd);box-shadow:0 0 0 3px var(--red-dim);background:var(--s0);}
+.srch-ic{font-size:12px;color:var(--t4);flex-shrink:0;}
+#srch{flex:1;border:none;outline:none;background:transparent;font-family:var(--f-bod);font-size:12px;font-weight:500;color:var(--t0);}
+#srch::placeholder{color:var(--t5);}
+#srch-clr{width:17px;height:17px;border-radius:50%;border:none;background:var(--s4);color:var(--t2);font-size:9px;cursor:pointer;font-weight:800;display:none;align-items:center;justify-content:center;transition:var(--ease);}
+#srch-clr.show{display:flex;}
+#srch-clr:hover{background:var(--red);color:#fff;}
+#srch-cnt{font-size:9px;color:var(--t4);margin-top:3px;font-weight:500;padding-left:1px;}
+
+/* Filter tabs */
+.ftabs{display:flex;gap:0;border-bottom:1px solid var(--b1);flex-shrink:0;background:var(--s2);}
+.ftab{flex:1;padding:7px 4px;border:none;border-right:1px solid var(--b1);background:transparent;font-family:var(--f-bod);font-size:11px;font-weight:600;cursor:pointer;text-align:center;transition:var(--ease);color:var(--t3);}
+.ftab:last-child{border-right:none;}
+.ftab:hover{color:var(--t0);background:var(--s3);}
+.ftab.on{background:var(--s0);color:var(--t0);box-shadow:inset 0 -2px 0 var(--red);}
+.ftab.ft-w.on{color:var(--sw);box-shadow:inset 0 -2px 0 var(--sw);}
+.ftab.ft-c.on{color:#c96000;box-shadow:inset 0 -2px 0 #ff9800;}
+
+/* ── SPOT CARDS — TOA is the hero ───────────────────────── */
+#spot-list{flex:1;overflow-y:auto;padding:5px 7px 4px;min-height:0;background:var(--s1);scrollbar-width:thin;scrollbar-color:var(--s4) transparent;}
+#spot-list::-webkit-scrollbar{width:4px;}
+#spot-list::-webkit-scrollbar-thumb{background:var(--s4);border-radius:4px;}
+
+.scard{
+  padding:9px 10px 8px 12px;
+  border-radius:var(--r6);border:1px solid var(--b1);
+  margin-bottom:4px;cursor:pointer;
+  transition:transform var(--ease),box-shadow var(--ease),border-color var(--ease),background var(--ease);
+  position:relative;background:var(--s0);overflow:hidden;
+  display:grid;grid-template-columns:auto 1fr;gap:0 10px;align-items:start;
+}
+.scard::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;}
+.scard.watch,.scard.safe{border-color:var(--ss-bd);background:#f0fdfb;}
+.scard.caution{border-color:rgba(255,152,0,.30);background:#fff8f0;}
+.scard.warning{border-color:var(--sw-bd);background:#fff0f5;animation:card-warn 2.8s ease-in-out infinite;}
+@keyframes card-warn{0%,100%{box-shadow:none;}50%{box-shadow:0 0 10px rgba(233,30,99,.12);}}
+.scard.watch::before,.scard.safe::before{background:var(--ss);}
+.scard.caution::before{background:#ff9800;}
+.scard.warning::before{background:var(--sw);}
+.scard:hover{transform:translateX(2px);border-color:var(--b3);box-shadow:var(--sh1);}
+.scard.selected{outline:2px solid var(--red);outline-offset:0;background:rgba(244,58,9,.03)!important;transform:translateX(3px);box-shadow:var(--sh1);}
+.scard.warning.raining-now{animation:card-rain 1.2s ease-in-out infinite;background:#fff0f5;}
+@keyframes card-rain{0%,100%{box-shadow:0 0 0 0 rgba(233,30,99,0);}50%{box-shadow:0 0 0 5px rgba(233,30,99,.18);}}
+
+/* TOA hero — left column, big */
+.sc-toa-col{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding-top:1px;min-width:48px;}
+.sc-toa{font-family:var(--f-dis);line-height:1;letter-spacing:.5px;text-align:center;}
+.scard.warning .sc-toa,.scard.caution .sc-toa,.scard.safe .sc-toa,.scard.watch .sc-toa{font-size:22px;}
+.scard.warning .sc-toa{color:var(--sw);}
+.scard.caution .sc-toa{color:#c96000;}
+.scard.safe .sc-toa,.scard.watch .sc-toa{color:#007a6a;font-size:13px;font-family:var(--f-bod);font-weight:700;}
+.sc-toa-unit{font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-top:1px;opacity:.65;}
+.scard.warning .sc-toa-unit{color:var(--sw);}
+.scard.caution .sc-toa-unit{color:#c96000;}
+.scard.safe .sc-toa-unit,.scard.watch .sc-toa-unit{color:#007a6a;}
+
+/* Name + meta — right column */
+.sc-info{min-width:0;padding-top:2px;}
+.sc-name{font-size:12px;font-weight:700;color:var(--t0);line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;letter-spacing:-.2px;}
+.sc-name-alt{font-size:10px;color:var(--t3);line-height:1.3;font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.sc-addr{font-size:10px;color:var(--t2);line-height:1.3;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;}
+.sc-bot{display:flex;justify-content:space-between;align-items:center;margin-top:4px;}
+.sc-badge{font-size:9px;padding:2px 7px;border-radius:4px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;}
+.sc-fly{font-size:12px;cursor:pointer;opacity:.3;transition:opacity var(--ease);line-height:1;user-select:none;}
+.sc-fly:hover{opacity:1;}
+
+/* Empty state */
+.empty-st{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:40px 16px;text-align:center;}
+.empty-st .ei{font-size:28px;opacity:.18;}
+.empty-st .et{font-size:13px;font-weight:700;color:var(--t3);}
+.empty-st .es{font-size:11px;color:var(--t4);line-height:1.7;}
+
+/* Load more */
+#lm-btn{display:none;width:calc(100% - 16px);margin:2px 8px 6px;padding:8px;border:1px solid var(--b1);border-radius:var(--r6);background:var(--s2);color:var(--t2);font-family:var(--f-bod);font-size:11px;font-weight:700;cursor:pointer;transition:var(--ease);}
+#lm-btn:hover{border-color:var(--red-bd);color:var(--red);background:var(--red-dim);}
+#lm-btn.show{display:block;}
+
+/* Keyboard focus */
+.scard:focus-visible,.scard.kb-focus{outline:2px solid var(--blue);outline-offset:1px;box-shadow:0 0 0 4px var(--blue-mid);}
+
+/* ═══════════════════════════════════════════════════════════
+   LOADING SCREEN
+═══════════════════════════════════════════════════════════ */
+#ld{position:fixed;inset:0;z-index:9999;background:var(--t0);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;transition:opacity .5s ease;}
+#ld.fade{opacity:0;pointer-events:none;}
+#ld.gone{display:none;}
+.ld-radar{width:64px;height:64px;position:relative;}
+.ld-radar svg{width:100%;height:100%;}
+.ld-sweep{transform-origin:32px 32px;animation:radar-sweep 2s linear infinite;}
+@keyframes radar-sweep{to{transform:rotate(360deg);}}
+.ld-wordmark{text-align:center;}
+.ld-title{font-family:var(--f-dis);font-size:28px;letter-spacing:3px;color:rgba(255,255,255,.9);line-height:1;}
+.ld-title span{color:var(--red);}
+.ld-sub{font-size:10px;font-weight:600;letter-spacing:3px;text-transform:uppercase;color:rgba(255,255,255,.3);margin-top:4px;}
+.ld-bar{width:220px;height:2px;background:rgba(255,255,255,.08);border-radius:2px;overflow:hidden;}
+.ld-fill{height:100%;width:0%;background:var(--red);border-radius:2px;transition:width .3s ease;}
+#ld-msg{font-size:10px;font-weight:600;color:rgba(255,255,255,.4);min-height:13px;letter-spacing:.5px;}
+.ld-arcgis{font-size:9px;font-weight:500;letter-spacing:1.5px;text-transform:uppercase;color:rgba(255,255,255,.18);margin-top:4px;}
+
+/* ── Responsive ──────────────────────────────────────────── */
+@media(max-width:900px){
+  #app{grid-template-columns:1fr 290px;}
+  .brand-name{font-size:15px;}
+}
+@media(max-width:680px){
+  #app{grid-template-columns:1fr;grid-template-rows:52px 1fr 260px;}
+  #map-wrap{grid-column:1;grid-row:2;}
+  #panel{grid-column:1;grid-row:3;border-left:none;border-top:2px solid var(--b1);}
+  #ec,#leg{display:none;}
+  #lc{top:6px;right:6px;}
+  #alert-sub{display:none;}
+}
+
+/* ── Radar external links (lc card) ─────────────────── */
+.rl-hd{font-size:8px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;
+  color:var(--t4);margin:10px 0 6px;}
+.rl-row{display:flex;flex-direction:column;gap:5px;}
+.rl-btn{display:flex;align-items:center;gap:7px;padding:7px 10px;
+  border-radius:8px;text-decoration:none;border:1px solid var(--b1);
+  background:var(--s2);transition:var(--ease);cursor:pointer;}
+.rl-btn:hover{border-color:var(--b3);background:var(--s0);box-shadow:var(--sh1);}
+.rl-ico{font-size:15px;flex-shrink:0;line-height:1;}
+.rl-txt{flex:1;min-width:0;}
+.rl-name{font-size:11px;font-weight:700;color:var(--t1);line-height:1.2;}
+.rl-src{font-size:9px;color:var(--t3);font-weight:500;margin-top:1px;}
+.rl-arr{font-size:11px;color:var(--t4);flex-shrink:0;}
+</style>
+</head>
+<body>
+
+<!-- ── LOADING SCREEN ─────────────────────────────────────── -->
+<div id="ld">
+  <div class="ld-radar">
+    <svg viewBox="0 0 64 64" fill="none">
+      <!-- Static rings -->
+      <circle cx="32" cy="32" r="30" stroke="rgba(255,255,255,.08)" stroke-width="1"/>
+      <circle cx="32" cy="32" r="20" stroke="rgba(255,255,255,.06)" stroke-width="1"/>
+      <circle cx="32" cy="32" r="10" stroke="rgba(255,255,255,.1)" stroke-width="1"/>
+      <!-- Cross hairs -->
+      <line x1="32" y1="2"  x2="32" y2="62" stroke="rgba(255,255,255,.05)" stroke-width="1"/>
+      <line x1="2"  y1="32" x2="62" y2="32" stroke="rgba(255,255,255,.05)" stroke-width="1"/>
+      <!-- Animated sweep -->
+      <g class="ld-sweep">
+        <path d="M32 32 L32 4" stroke="none"/>
+        <path d="M32 32 L58 20 A30 30 0 0 0 32 2 Z" fill="url(#sweep-grad)" opacity=".6"/>
+        <defs>
+          <linearGradient id="sweep-grad" x1="32" y1="32" x2="58" y2="2" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stop-color="#f43a09" stop-opacity=".8"/>
+            <stop offset="100%" stop-color="#f43a09" stop-opacity="0"/>
+          </linearGradient>
+        </defs>
+      </g>
+      <!-- Centre dot -->
+      <circle cx="32" cy="32" r="2.5" fill="#f43a09"/>
+    </svg>
+  </div>
+  <div class="ld-wordmark">
+    <div class="ld-title">WEATHERWARNING<span>HK</span></div>
+    <div class="ld-sub">Hyper-Local Rainfall Warning System</div>
+  </div>
+  <div class="ld-bar"><div class="ld-fill" id="ld-fill"></div></div>
+  <div id="ld-msg">Initialising…</div>
+  <div class="ld-arcgis">ArcGIS JS 4.28 · CSDI · RainViewer · HKO</div>
+</div>
+
+<!-- ── APP SHELL ──────────────────────────────────────────── -->
+<div id="app">
+
+  <!-- TOP BAR — threat-level alert strip -->
+  <header id="topbar" class="state-clear">
+    <!-- Alert banner: hero element — updated by JS -->
+    <div id="alert-banner">
+      <span id="alert-icon">✓</span>
+      <span id="alert-text">All Clear — No significant echo within 100 km</span>
+      <span id="alert-sub">Last checked: —</span>
+    </div>
+
+    <!-- Brand + clock — right side -->
+    <div class="brand">
+      <div class="brand-logo">
+        <svg viewBox="0 0 22 22" fill="none">
+          <circle cx="11" cy="11" r="9.5" stroke="rgba(255,255,255,.18)" stroke-width="1"/>
+          <circle cx="11" cy="11" r="5.5" stroke="rgba(255,255,255,.25)" stroke-width="1"/>
+          <circle cx="11" cy="11" r="1.5" fill="#f43a09"/>
+          <path d="M11 11 L19 6.5 A9.5 9.5 0 0 0 11 1.5 Z" fill="#f43a09" opacity=".5"/>
+        </svg>
+      </div>
+      <div class="brand-name">WEATHERWARNING<span>HK</span></div>
+    </div>
+    <div class="t-right">
+      <div id="clk">—:—:—</div>
+    </div>
+  </header>
+
+  <!-- UNIFIED MAP: radar overlay + Wi-Fi TOA dots together -->
+  <main id="map-wrap">
+    <div id="viewDiv"></div>
+
+    <!-- Storm direction arrow overlay (drawn by JS when echo detected) -->
+  
+    <!-- Selection pin -->
+    <div id="sel-pin">
+      <div class="sp-rings">
+        <div class="sp-ring" id="sp-r1"></div>
+        <div class="sp-ring" id="sp-r2"></div>
+        <div class="sp-ring" id="sp-r3"></div>
+        <div class="sp-dot"  id="sp-dot"></div>
+      </div>
+      <div class="sp-label" id="sp-label"></div>
+    </div>
+
+    <!-- Layer controls + rainfall legend — top right -->
+    <div class="mcard" id="lc" style="top:12px;right:12px;padding:12px 14px;min-width:210px;">
+      <div class="mcard-hd">Layer Controls</div>
+      <div class="lc-row">
+        <span class="lc-lbl">Wi-Fi Hotspots</span>
+        <label class="tog"><input type="checkbox" id="tog-wifi" checked/><div class="tog-tr"></div></label>
+      </div>
+      <div class="lc-sep"></div>
+      <div id="lc-cnt" style="font-family:var(--f-dis);font-size:26px;letter-spacing:1px;color:var(--red);line-height:1">—</div>
+      <div id="lc-lbl" style="font-size:9px;color:var(--t3);font-weight:700;letter-spacing:1.5px;text-transform:uppercase">HOTSPOTS</div>
+      <!-- ── External radar links ── -->
+      <div class="rl-hd">Check Live Radar</div>
+      <div class="rl-row">
+        <a class="rl-btn" href="https://www.rainviewer.com/weather-radar-map-live.html" target="_blank" rel="noopener">
+          <span class="rl-ico">🌧</span>
+          <span class="rl-txt">
+            <div class="rl-name">RainViewer</div>
+            <div class="rl-src">Global live radar map</div>
+          </span>
+          <span class="rl-arr">↗</span>
+        </a>
+        <a class="rl-btn" href="https://www.hko.gov.hk/en/wxinfo/radars/radar_range1.htm" target="_blank" rel="noopener">
+          <span class="rl-ico">📡</span>
+          <span class="rl-txt">
+            <div class="rl-name">HKO Radar</div>
+            <div class="rl-src">Hong Kong Observatory</div>
+          </span>
+          <span class="rl-arr">↗</span>
+        </a>
+      </div>
+    </div>
+
+    <!-- Echo motion — bottom left -->
+    <div class="mcard" id="ec">
+      <div class="mcard-hd">Radar Echo Motion</div>
+      <div class="cmp-row">
+        <svg viewBox="0 0 40 40" width="38" height="38">
+          <circle cx="20" cy="20" r="17.5" fill="none" stroke="var(--b1)" stroke-width="1.5"/>
+          <circle cx="20" cy="20" r="10" fill="none" stroke="var(--b1)" stroke-width="1"/>
+          <line x1="20" y1="3"  x2="20" y2="8"  stroke="var(--b2)" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="20" y1="32" x2="20" y2="37" stroke="var(--b2)" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="3"  y1="20" x2="8"  y2="20" stroke="var(--b2)" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="32" y1="20" x2="37" y2="20" stroke="var(--b2)" stroke-width="1.5" stroke-linecap="round"/>
+          <text x="20" y="6" text-anchor="middle" font-family="Plus Jakarta Sans" font-size="4.5" fill="var(--t4)" font-weight="700">N</text>
+          <g id="arrow-g" transform="rotate(0 20 20)">
+            <polygon points="20,3 17.5,12 20,10.5 22.5,12" fill="var(--red)" opacity=".9"/>
+            <polygon points="20,37 17.5,28 20,29.5 22.5,28" fill="var(--green)" opacity=".7"/>
+          </g>
+        </svg>
+        <div>
+          <div id="hdg-val" style="font-family:var(--f-dis);font-size:20px;color:var(--t0);line-height:1;letter-spacing:1px">—</div>
+          <div id="hdg-dir" style="font-size:10px;color:var(--t3);margin-top:3px;font-weight:600">Echo Direction</div>
+        </div>
+      </div>
+      <div class="ec-row"><span class="ec-k">Speed</span><span class="ec-v c-amb" id="ec-spd">—</span></div>
+      <div class="ec-row"><span class="ec-k">Direction</span><span class="ec-v c-amb" id="ec-dir">—</span></div>
+      <div class="ec-row"><span class="ec-k">Confidence</span><span class="ec-v c-jade" id="ec-conf">—</span></div>
+      <div class="ec-row"><span class="ec-k">At-Risk Spots</span><span class="ec-v c-red" id="ec-risk">—</span></div>
+      <div class="ec-row"><span class="ec-k">Updated</span><span class="ec-v c-mute" id="ec-upd">—</span></div>
+      <div class="ec-bnr clr" id="ec-bnr">No significant echo detected</div>
+    </div>
+
+    <!-- Hotspot status legend — bottom right -->
+    <div class="mcard" id="leg">
+      <div class="leg-hd">Hotspot Status</div>
+      <div class="leg-row"><div class="leg-dot" style="width:12px;height:12px;background:#e91e63;box-shadow:0 0 6px rgba(233,30,99,.4)"></div><span class="leg-lbl" style="color:var(--sw)">WARNING  ≤20 min</span></div>
+      <div class="leg-row"><div class="leg-dot" style="width:8px;height:8px;background:#ff9800"></div><span class="leg-lbl" style="color:#c96000">CAUTION  21–45 min</span></div>
+      <div class="leg-row"><div class="leg-dot" style="width:5px;height:5px;background:#00bfa5"></div><span class="leg-lbl" style="color:#007a6a">SAFE / CLEAR  &gt;45 min</span></div>
+    </div>
+
+    <!-- Popup card — bottom left, above echo card -->
+    <div id="popupCard">
+      <div class="pc-strip watch" id="pc-strip"></div>
+      <div class="pc-inner">
+        <div class="pc-header">
+          <div class="pc-title">
+            <div class="pc-name" id="pc-name">—</div>
+            <div class="pc-name-alt" id="pc-name-alt"></div>
+          </div>
+          <button class="pc-close" id="pc-close-btn" title="Close">✕</button>
+        </div>
+        <span class="pc-badge" id="pc-badge"></span>
+        <div class="toa-bx watch" id="pc-toa">
+          <div class="toa-lb">Rain Arrives In</div>
+          <div class="toa-v" id="pc-toa-v">—</div>
+          <div class="toa-ht" id="pc-toa-h">—</div>
+        </div>
+        <div class="pc-stats">
+          <div class="pc-stat"><span class="sv" id="pc-spd">—</span><span class="sl">Speed</span></div>
+          <div class="pc-stat"><span class="sv" id="pc-hdg">—</span><span class="sl">Heading</span></div>
+          <div class="pc-stat"><span class="sv" id="pc-min">—</span><span class="sl">TOA Min</span></div>
+        </div>
+        <div class="pc-edge-row">
+          <span class="pc-edge-k">Leading edge · ray</span>
+          <span class="pc-edge-val c-mute" id="pc-edge">—</span>
+        </div>
+        <!-- Collapsible details -->
+        <div class="pc-details-toggle" id="pc-det-toggle" onclick="this.classList.toggle('open');document.getElementById('pc-details').classList.toggle('open')">
+          <span>Location &amp; Hotspot Details</span>
+          <span class="pdt-arrow">▾</span>
+        </div>
+        <div class="pc-details" id="pc-details"></div>
+      </div>
+    </div>
+
+    <div id="attr">
+      © <a href="https://www.geodata.gov.hk" target="_blank">Lands Dept HKSAR</a> &nbsp;·&nbsp;
+      © <a href="https://www.rainviewer.com/" target="_blank">RainViewer</a> &nbsp;·&nbsp;
+      © CSDI / Digital Policy Office &nbsp;·&nbsp;
+      © <a href="https://www.arcgis.com" target="_blank">Esri</a>
+    </div>
+  </main>
+
+  <!-- RIGHT PANEL -->
+  <aside id="panel">
+    <div class="pnl-hd">
+      <div class="pnl-hd-top">
+        <div>
+          <div class="pnl-hd-title">Wi-Fi Hotspots</div>
+          <div class="pnl-hd-sub" id="pnl-sub">Loading…</div>
+        </div>
+      </div>
+      <!-- BIG stats — warning count is the hero -->
+      <div class="pnl-stats">
+        <div class="pnl-stat ps-warn" id="stat-warn-col">
+          <div class="ps-n" id="sb-warn">0</div>
+          <div class="ps-l">⚠ WARN</div>
+        </div>
+        <div class="pnl-stat ps-caut">
+          <div class="ps-n" id="sb-caut">0</div>
+          <div class="ps-l">CAUTION</div>
+        </div>
+        <div class="pnl-stat ps-safe">
+          <div class="ps-n" id="ps-safe">0</div>
+          <div class="ps-l">SAFE</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="pp">
+      <div id="pp-txt">Connecting to CSDI FeatureServer…</div>
+      <div class="pp-track"><div class="pp-fill" id="pp-fill"></div></div>
+    </div>
+
+    <div class="srch-wrap">
+      <div class="srch-inner">
+        <span class="srch-ic">⌕</span>
+        <input type="text" id="srch" placeholder="Search by name, district or SSID…" autocomplete="off" spellcheck="false"/>
+        <button id="srch-clr">✕</button>
+      </div>
+      <div id="srch-cnt"></div>
+    </div>
+
+    <div class="ftabs">
+      <button class="ftab on"   id="ft-all">All</button>
+      <button class="ftab ft-w" id="ft-warn">⚠ Warning</button>
+    </div>
+
+    <div id="spot-list">
+      <div class="empty-st" id="empty-st">
+        <div class="ei">📶</div>
+        <div class="et">Loading hotspots…</div>
+        <div class="es">Fetching all 4,400+ government<br>Wi-Fi locations via CSDI ArcGIS</div>
+      </div>
+    </div>
+    <button id="lm-btn">Load more ↓</button>
+  </aside>
+
+
+</div>
+
+<script>
+
+'use strict';
+
+/* ════════════════════════════════════════════════════════════════
+   ARCGIS ONLINE CONFIGURATION
+   ─────────────────────────────────────────────────────────────────
+   TO DEPLOY ON ARCGIS ONLINE:
+   1. Register app at: https://www.arcgis.com/sharing/rest/oauth2/registerApp
+   2. Fill in PORTAL_URL, APP_ID, REDIRECT_URI below
+   3. Uncomment the IdentityManager block in require() imports
+   4. Set WEBMAP_ID to use a hosted web map instead of local basemap
+   5. Upload this file to ArcGIS Online > Content > Add Item > Web Mapping App
+   ─────────────────────────────────────────────────────────────────
+   CSDI FEATURESERVER: No auth needed (public open data).
+   HKO GRIDDED API:    No auth needed (public open data).
+   RAINVIEWER API:     No auth needed (public free tier).
+════════════════════════════════════════════════════════════════ */
+const ARCGIS_CONFIG = {
+  // ArcGIS Online / Enterprise portal
+  PORTAL_URL:    'https://www.arcgis.com',
+  APP_ID:        '42709f0ab907483699de2bc704ad5f58',
+  REDIRECT_URI:  'https://james1y.github.io',
+  // Hosted web map
+  WEBMAP_ID:     'e9270da186db49b382051aa612544386',
+  // App metadata
+  APP_VERSION:   'v1.0.0',
+  APP_BUILD:     '2026-Q1',
+  ITEM_TYPE:     'Web Mapping Application',
+  // ── TOA Dashboard layer ────────────────────────────────────────
+  TOA_LAYER_ID:  '75e82b27e28d4308b0b811e382254f3e',
+  TOA_LAYER_URL: 'https://services4.arcgis.com/jim2f7B8UyqRDApI/arcgis/rest/services/WeatherWarningHK_TOA/FeatureServer/0',
+};
+
+/* ── ArcGIS Online OAuth — ACTIVE ──────────────────────────────
+   OAuthInfo + IdentityManager added to require() imports below.
+   getAGOLToken(), pushTOAToAGOL(), populateTOALayer() defined
+   inside require() block — used to write TOA results to the
+   hosted WeatherWarningHK_TOA FeatureLayer for Dashboard.
+─────────────────────────────────────────────────────────────── */
+
+
+/* ── i18n ── */
+const LANG='en';
+const T={
+  N:'N',NNE:'NNE',NE:'NE',ENE:'ENE',E:'E',ESE:'ESE',SE:'SE',SSE:'SSE',
+  S:'S',SSW:'SSW',SW:'SW',WSW:'WSW',W:'W',WNW:'WNW',NW:'NW',NNW:'NNW',
+  vPark:'Park',vLib:'Library',vGov:'Gov.',vHub:'Transit',vPub:'Public',
+  noEcho:'No echo',activeBnr:'⚡ Echo {spd} km/h · Moving {dir}',
+  clearBanner:'✓ Clear — no echo detected within 100 km',
+  warnBnr:'⚠ {n} spot(s) impacted in 20 min!',movDir:'Moving {dir}',
+  rainingNow:'🌧 RAINING NOW — seek shelter immediately!',seekShelt:'⚠ Seek shelter immediately!',prepShelt:'🟡 Prepare to move indoors',
+  safe:'✅ Currently clear',clear:'✅ No echo in range',
+  emptyNone:'No results',loadMore:'Load more ↓',
+};
+function tr(k,vars){let s=T[k]??k;if(vars)Object.keys(vars).forEach(x=>s=s.replace('{'+x+'}',vars[x]));return s;}
+
+/* ── Constants ── */
+const HK_LAT=22.3193, HK_LON=114.1694;
+const WIFI_URL='https://portal.csdi.gov.hk/server/rest/services/common/dpo_rcd_1629267205215_74392/FeatureServer/0';
+const RV_API='https://api.rainviewer.com/public/weather-maps.json';
+const RV_COLOR=8, RV_OPT='1_0', RV_ZOOM=7;
+/* ── RainViewer tile info — Web Mercator LODs zoom 0-12 only
+   RainViewer does NOT serve tiles beyond zoom 12.
+   Without this ArcGIS requests zoom 13-20 and throws
+   "Layer has no tile at this zoom level" errors.          ── */
+const RV_TILE_INFO = {
+  dpi:96, rows:256, cols:256,
+  origin:{x:-20037508.342787,y:20037508.342787},
+  spatialReference:{wkid:102100},
+  lods:[
+    {level:0,  scale:591657527.591555, resolution:156543.033928},
+    {level:1,  scale:295828763.795777, resolution:78271.5169639},
+    {level:2,  scale:147914381.897889, resolution:39135.7584820},
+    {level:3,  scale:73957190.948944,  resolution:19567.8792410},
+    {level:4,  scale:36978595.474472,  resolution:9783.93962050},
+    {level:5,  scale:18489297.737236,  resolution:4891.96981025},
+    {level:6,  scale:9244648.868618,   resolution:2445.98490513},
+    {level:7,  scale:4622324.434309,   resolution:1222.99245256},
+    {level:8,  scale:2311162.217155,   resolution:611.496226281},
+    {level:9,  scale:1155581.108577,   resolution:305.748113141},
+    {level:10, scale:577790.554289,    resolution:152.874056570},
+    {level:11, scale:288895.277144,    resolution:76.4370282852},
+    {level:12, scale:144447.638572,    resolution:38.2185141426},
+  ]
+};
+
+
+/* TOA colour palette */
+const TOA_CLR={
+  warning:{fill:'#e91e63',outline:'rgba(233,30,99,0.60)'},  // hot pink — raining/imminent
+  caution:{fill:'#ff9800',outline:'rgba(255,152,0,0.55)'},   // amber — rain approaching
+  safe:   {fill:'#00bfa5',outline:'rgba(0,191,165,0.45)'},   // teal — clear
+  watch:  {fill:'#00bfa5',outline:'rgba(0,191,165,0.40)'},   // teal — no data yet
+};
+
+/* ── Pure utilities (no ArcGIS dependency) ── */
+const DEG=Math.PI/180;
+function haversine(la1,lo1,la2,lo2){const R=6371,dL=(la2-la1)*DEG,dN=(lo2-lo1)*DEG,a=Math.sin(dL/2)**2+Math.cos(la1*DEG)*Math.cos(la2*DEG)*Math.sin(dN/2)**2;return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));}
+function bearing(la1,lo1,la2,lo2){const dN=(lo2-lo1)*DEG,r1=la1*DEG,r2=la2*DEG;return((Math.atan2(Math.sin(dN)*Math.cos(r2),Math.cos(r1)*Math.sin(r2)-Math.sin(r1)*Math.cos(r2)*Math.cos(dN))/DEG)+360)%360;}
+function inCone(fla,flo,sla,slo,hdg){const d=Math.abs(((bearing(fla,flo,sla,slo)-hdg)+360)%360);return d<100||d>260;}
+function tileXY(lat,lon,z){const n=1<<z,r=lat*DEG;return{x:Math.floor((lon+180)/360*n),y:Math.floor((1-Math.log(Math.tan(r)+1/Math.cos(r))/Math.PI)/2*n)};}
+function median(a){if(!a.length)return 0;const s=[...a].sort((x,y)=>x-y),m=Math.floor(s.length/2);return s.length%2?s[m]:(s[m-1]+s[m])/2;}
+function fmtMin(m){
+  if(m===0)return 'RAINING';
+  if(!m||m<1)return '<1 min';
+  if(m<60)return m+' min';
+  return Math.floor(m/60)+' h '+String(m%60).padStart(2,'0')+'m';
+}
+function dirLabel(d){const k=['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];return tr(k[Math.round(d/22.5)%16]);}
+function fmtHKT(unix){return new Date(unix*1000).toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Hong_Kong'});}
+function venueType(n='',c=''){const s=(n+' '+c).toLowerCase();if(/park|promenade|garden|beach|reserve/.test(s))return'park';if(/librar|museum|heritage|gallery/.test(s))return'lib';if(/government|office|service|hall|court/.test(s))return'gov';if(/station|terminal|ferry|bus|mtr|pier|airport/.test(s))return'hub';return'other';}
+
+function prog(pct,msg){
+  document.getElementById('ld-fill').style.width=pct+'%';
+  if(msg)document.getElementById('ld-msg').textContent=msg;
+}
+function hideLoading(){const el=document.getElementById('ld');el.classList.add('fade');setTimeout(()=>el.classList.add('gone'),600);}
+
+/* ── Clock ── */
+(function tick(){
+  document.getElementById('clk').textContent=new Date().toLocaleTimeString('en-HK',{hour12:false,timeZone:'Asia/Hong_Kong'});
+  setTimeout(tick,1000);
+})();
+
+/* ── Lang toggle ── */
+/* lang toggle removed — English only */
+
+/* ═══════════════════════════════════════════════════════════
+   GLOBAL KEYBOARD NAVIGATION
+   /       — focus search box
+   ?       — toggle About modal
+   Escape  — close popup / clear selection (wired inside require, but
+             we handle the modal case here)
+   ↑ ↓     — navigate spot list (wired inside require after renderList)
+   Enter   — select focused card
+═══════════════════════════════════════════════════════════ */
+document.addEventListener('keydown', e=>{
+  // / → focus search
+  if(e.key==='/' && document.activeElement.id!=='srch'){
+    e.preventDefault();
+    document.getElementById('srch')?.focus();
+    return;
+  }
+  // Escape → close popup (require block wires clearSelection too)
+  if(e.key==='Escape'){
+    document.getElementById('popupCard').style.display='none';
+    if(window._clearSelection) window._clearSelection();
+    return;
+  }
+});
+
+/* ═══════════════════════════════════════════════════════════
+   MAIN INIT — wrapped in window.load to guarantee ArcGIS
+   require() is defined before we call it.
+═══════════════════════════════════════════════════════════ */
+window.addEventListener('load', function() {
+  if(typeof require === 'undefined'){
+    document.getElementById('ld-msg').textContent='⚠ ArcGIS CDN failed — check network';
+    return;
+  }
+
+  require([
+    'esri/WebMap',
+    'esri/views/MapView',
+    'esri/layers/WebTileLayer',
+    'esri/layers/FeatureLayer',
+    'esri/layers/GraphicsLayer',
+    'esri/Graphic',
+    'esri/geometry/geometryEngine',
+    'esri/geometry/Point',
+    'esri/identity/OAuthInfo',
+    'esri/identity/IdentityManager',
+  ], function(WebMap, MapView, WebTileLayer, FeatureLayer, GraphicsLayer, Graphic, geometryEngine, Point,
+              OAuthInfo, IdentityManager) {
+
+    const AGOL_MAP_ID = ARCGIS_CONFIG.WEBMAP_ID;
+    const AGOL_PORTAL  = ARCGIS_CONFIG.PORTAL_URL;
+
+    /* ── OAuth 2.0 initialisation ─────────────────────────────────
+       Registers the app with IdentityManager so any AGOL request
+       automatically gets a valid token attached.
+       checkSignInStatus resolves silently if already signed in,
+       rejects silently if not (public layers still load fine).
+    ─────────────────────────────────────────────────────────────── */
+    const _oauthInfo = new OAuthInfo({
+      appId:     ARCGIS_CONFIG.APP_ID,
+      portalUrl: ARCGIS_CONFIG.PORTAL_URL,
+      popup:     false,
+    });
+    IdentityManager.registerOAuthInfos([_oauthInfo]);
+    IdentityManager.checkSignInStatus(ARCGIS_CONFIG.PORTAL_URL + '/sharing')
+      .then(() => console.log('[Auth] Session active'))
+      .catch(() => console.log('[Auth] Guest mode — public layers load without sign-in'));
+
+    /* ── App state — scoped inside require so all fns share it ── */
+    const S={
+      view:null,
+      wifiLayer:null, gfxLayer:null, radarLayer:null,
+      radarOn:false, wifiOn:true,  // radarLayer is computation-only — never displayed
+      spots:[], motion:null, rvHost:'', rvFrames:[],
+      selectedSpot:null,   // currently highlighted spot from panel/map click
+    };
+    let _tab='all', _q='', _page=0;
+    const PER=80;
+    const BADGE={
+      park:['b-park',()=>tr('vPark')],
+      lib: ['b-lib', ()=>tr('vLib')],
+      gov: ['b-gov', ()=>tr('vGov')],
+      hub: ['b-hub', ()=>tr('vHub')],
+      other:['b-other',()=>tr('vPub')],
+    };
+
+    /* ── ArcGIS Online WebMap (user's custom map as base) ── */
+    prog(5,'Loading basemap…');
+    const map=new WebMap({
+      portalItem:{
+        id:AGOL_MAP_ID,
+        portal:{url:AGOL_PORTAL},
+      },
+    });
+    const view=new MapView({
+      container:'viewDiv',map,
+      center:[114.177,22.303],zoom:11,
+      ui:{components:['zoom']},
+    });
+    S.view=view;
+    view.popup.autoOpenEnabled=false;
+
+
+
+    /* ── Wi-Fi FeatureLayer (query + click support only; dots rendered by GraphicsLayer) ── */
+    prog(10,'Loading Wi-Fi layer…');
+    const wifiLayer=new FeatureLayer({
+      url:WIFI_URL, id:'wifi-hk', opacity:0,  // GraphicsLayer renders status dots
+      outFields:['OBJECTID','SSID','NAME_EN','NAME_TC','VENUE_NAME_EN','VENUE_NAME_TC',
+        'DISTRICT_EN','DISTRICT_TC','CATEGORY_EN','CATEGORY_TC',
+        'LOCATION_EN','LOCATION_TC','ADDRESS_EN','ADDRESS_TC',
+        'MANAGEMENT_ORG_EN','MANAGEMENT_ORG_TC','HOTSPOT_TYPE'],
+      /* no featureReduction — GraphicsLayer owns all status dot rendering */
+      renderer:{type:'simple',symbol:{
+        type:'simple-marker',color:'#3d86c8',size:'6px',
+        outline:{color:'rgba(255,255,255,0.9)',width:1.5},
+      }},
+    });
+    S.wifiLayer=wifiLayer; // added to map in boot() after view.when()
+
+    /* ── Coloured TOA GraphicsLayer (above FeatureLayer) ── */
+    const gfxLayer=new GraphicsLayer({id:'toa-dots',listMode:'hide'});
+    S.gfxLayer=gfxLayer; // added to map in boot() after view.when()
+
+    /* ── Radar ── */
+    prog(15,'Loading radar…');
+    async function updateRadar(){
+      try{
+        const d=await fetch(RV_API).then(r=>r.json());
+        S.rvHost=d.host; S.rvFrames=d.radar?.past||[];
+        if(!S.rvFrames.length)return;
+        const f=S.rvFrames[S.rvFrames.length-1];
+        /* Radar layer is computation-only (echo motion + TOA ray-cast).
+           It is NEVER added to the map for visual display. */
+        if(S.radarLayer) S.radarLayer=null;
+        S.radarLayer=new WebTileLayer({
+          urlTemplate:S.rvHost+f.path+'/256/{level}/{col}/{row}/'+RV_COLOR+'/'+RV_OPT+'.png',
+          tileInfo:RV_TILE_INFO,
+          opacity:0,copyright:'© RainViewer',id:'rainviewer',
+        });
+        /* ← intentionally NOT added to map — only used for pixel sampling */
+      }catch(e){
+        console.warn('[Radar]',e.message||e);
+      }
+    }
+
+    /* ── Layer toggles ── */
+    document.getElementById('tog-wifi').addEventListener('change',function(){
+      S.wifiOn=this.checked;
+      S.wifiLayer.visible=S.wifiOn;
+      if(S.gfxLayer)S.gfxLayer.visible=S.wifiOn;
+    });
+
+    /* ══════════════════════════════════════════════════════════
+       POPUP — showPopupFromSpot(spot)
+       Defined inside require() so it has access to S, BADGE,
+       all i18n helpers, and ArcGIS modules.
+       Exposed on window._showPopup so panel cards can call it.
+    ══════════════════════════════════════════════════════════ */
+    function showPopupFromSpot(spot){      const vc=BADGE[spot.type]||BADGE.other;
+      const nameMain=spot.nameEN;
+      const nameAlt =spot.nameZH||'';
+      const dist    =spot.districtEN;
+      const cat     =spot.categoryEN;
+      const loc     =spot.locationEN;
+      const addr    =spot.addressEN;
+      const org     =spot.orgEN;
+      const cls     =spot.toaCls||'watch';
+      const hint    =spot.toa===0?tr('rainingNow'):cls==='warning'?tr('seekShelt'):cls==='caution'?tr('prepShelt'):cls==='safe'?tr('safe'):tr('safe');  // all non-warning/caution = safe
+      const m       =S.motion;
+
+      document.getElementById('pc-name').textContent    =nameMain;
+      const alt=document.getElementById('pc-name-alt');
+      alt.textContent=(nameAlt&&nameAlt!==nameMain)?nameAlt:'';
+      const badge=document.getElementById('pc-badge');
+      badge.textContent=vc[1](); badge.className='pc-badge '+vc[0];
+      document.getElementById('pc-toa').className='toa-bx '+cls;
+      document.getElementById('pc-strip').className='pc-strip '+cls;
+      document.getElementById('pc-toa-v').textContent=spot.toa!=null?fmtMin(spot.toa):'Clear';
+      document.getElementById('pc-toa-h').textContent=hint;
+      document.getElementById('pc-spd').textContent=m?m.speedKmh+' km/h':'—';
+      document.getElementById('pc-hdg').textContent=m?String(m.headingDeg).padStart(3,'0')+'°':'—';
+      document.getElementById('pc-min').textContent=spot.toa!=null?(spot.toa===0?'NOW':spot.toa+'m'):'—';
+
+      /* ── Echo leading-edge distance row ── */
+      const edgeEl=document.getElementById('pc-edge');
+      if(edgeEl){
+        if(spot.toa===0){
+          edgeEl.textContent='Inside echo (raining now)';
+          edgeEl.className='pc-edge-val c-red';
+        }else if(spot.edgeKm!=null){
+          const rayDir=spot.hitAngle!=null
+            ?(' · ray '+String(Math.round(spot.hitAngle)).padStart(3,'0')+'°')
+            :'';
+          edgeEl.textContent=spot.edgeKm+' km'+rayDir;
+          edgeEl.className='pc-edge-val';
+        }else{
+          edgeEl.textContent='—';
+          edgeEl.className='pc-edge-val c-mute';
+        }
+      }
+
+      /* ── Detail rows with subheadings ── */
+      function drow(icon,label,val){
+        if(!val||String(val).trim()==='')return '';
+        return `<div class="pc-row"><span class="pc-ri">${icon}</span><span class="pc-rk">${label}</span><span class="pc-rv">${val}</span></div>`;
+      }
+      function dsec(title){
+        return `<div class="pc-sec">${title}</div>`;
+      }
+      document.getElementById('pc-details').innerHTML=[
+        /* ── Location ── */
+        dsec('Location'),
+        drow('📍','Address',addr||loc||'—'),
+        drow('🏘','District',dist),
+        drow('📌','Coordinates',spot.lat.toFixed(5)+', '+spot.lon.toFixed(5)),
+        /* ── Hotspot ── */
+        dsec('Hotspot Info'),
+        drow('📶','SSID',spot.ssid),
+        drow('🏷','Category',cat),
+        drow('🔢','Type',spot.hotspotType),
+        /* ── Management ── */
+        dsec('Management'),
+        drow('🏢','Organisation',org),
+      ].join('');
+
+      const pc=document.getElementById('popupCard');
+      pc.style.display='block';
+      pc.scrollTop=0;
+    }
+    window._showPopup = showPopupFromSpot; // expose for external callers
+
+    /* ══════════════════════════════════════════════════════════
+       SELECTION PIN
+       selectSpot(spot) — show a pulsing coloured ring at the
+       spot's exact map coordinate with a name label above it,
+       making the selected dot unambiguous even in dense areas.
+
+       Uses view.toScreen() to convert lon/lat → pixel position
+       within #map-wrap. An extent watcher re-positions it on
+       every pan/zoom so the pin always tracks the right dot.
+    ══════════════════════════════════════════════════════════ */
+    const selPin  = document.getElementById('sel-pin');
+    const spLabel = document.getElementById('sp-label');
+    const spDot   = document.getElementById('sp-dot');
+    const spRings = ['sp-r1','sp-r2','sp-r3'].map(id=>document.getElementById(id));
+    const TOA_HEX = {warning:'#e91e63',caution:'#ff9800',safe:'#00bfa5', watch:'#00bfa5'};
+
+    function positionSelPin(spot){
+      const sc=view.toScreen(
+        new Point({longitude:spot.lon,latitude:spot.lat,spatialReference:{wkid:4326}})
+      );
+      if(!sc)return;
+      selPin.style.left=Math.round(sc.x)+'px';
+      selPin.style.top =Math.round(sc.y)+'px';
+    }
+
+    function selectSpot(spot, cardEl){
+      // Remove .selected from any previously highlighted card
+      const prev=document.querySelector('.scard.selected');
+      if(prev)prev.classList.remove('selected');
+
+      S.selectedSpot=spot;
+      const col=TOA_HEX[spot.toaCls]||TOA_HEX.watch;
+      spRings.forEach(r=>{r.style.borderColor=col;});
+      spDot.style.background=col;
+      const name=spot.nameEN;
+      const toaPart=spot.toa!=null?'  '+fmtMin(spot.toa):'';
+      spLabel.textContent=name+toaPart;
+      spLabel.style.borderColor=col+'66';
+      positionSelPin(spot);
+      selPin.style.display='block';
+
+      // Highlight the source card in the panel
+      if(cardEl)cardEl.classList.add('selected');
+    }
+
+    function clearSelection(){
+      const prev=document.querySelector('.scard.selected');
+      if(prev)prev.classList.remove('selected');
+      S.selectedSpot=null;
+      selPin.style.display='none';
+    }
+
+    // Re-position pin on every pan / zoom
+    view.watch('extent',()=>{ if(S.selectedSpot)positionSelPin(S.selectedSpot); });
+    // Re-label when lang toggles
+    window._refreshSelPin=()=>{ if(S.selectedSpot)selectSpot(S.selectedSpot); };
+
+    /* Close button → hide popup AND clear selection pin */
+    document.getElementById('pc-close-btn').addEventListener('click',()=>{
+      document.getElementById('popupCard').style.display='none';
+      clearSelection();
+    });
+    // Expose clearSelection for global keyboard handler
+    window._clearSelection = clearSelection;
+
+    /* ── Keyboard: ↑↓ navigate spot-list, Enter to select card ── */
+    let kbIdx = -1; // index into currently rendered cards
+    function kbHighlight(delta){
+      const cards=[...document.querySelectorAll('#spot-list .scard')];
+      if(!cards.length) return;
+      // Remove previous kb-focus
+      cards.forEach(c=>c.classList.remove('kb-focus'));
+      kbIdx = Math.max(0, Math.min(cards.length-1, kbIdx+delta));
+      const card=cards[kbIdx];
+      card.classList.add('kb-focus');
+      card.scrollIntoView({block:'nearest',behavior:'smooth'});
+      // Also move focus so Enter works
+      card.setAttribute('tabindex','0');
+      card.focus();
+    }
+    document.getElementById('spot-list').addEventListener('keydown', e=>{
+      if(e.key==='ArrowDown'){ e.preventDefault(); kbHighlight(1); }
+      if(e.key==='ArrowUp')  { e.preventDefault(); kbHighlight(-1); }
+      if(e.key==='Enter'){
+        const focused=document.querySelector('#spot-list .scard.kb-focus');
+        if(focused) focused.click();
+      }
+      if(e.key==='Escape'){
+        document.getElementById('popupCard').style.display='none';
+        clearSelection();
+      }
+    });
+    // Wrap renderList so keyboard focus index resets on every re-render
+    const _baseRender = window._renderList;
+    window._renderList = function(){ _baseRender && _baseRender(); kbIdx=-1; };
+
+
+    /* ── Map click handler ── */
+    view.on('click',event=>{
+      view.hitTest(event,{include:[gfxLayer,wifiLayer]}).then(resp=>{
+        /* Priority 1: coloured dot → spot by index */
+        const gfxHit=resp.results.find(r=>r.layer===gfxLayer);
+        if(gfxHit){
+          const idx=gfxHit.graphic.attributes?.spotIdx;
+          if(idx!=null&&S.spots[idx]){
+            selectSpot(S.spots[idx]);
+            showPopupFromSpot(S.spots[idx]);
+            view.goTo({center:[S.spots[idx].lon,S.spots[idx].lat],zoom:18},{duration:600});
+          }
+          return;
+        }
+        /* Priority 2: FeatureLayer hit */
+        const wHit=resp.results.find(r=>r.layer===wifiLayer);
+        if(!wHit){document.getElementById('popupCard').style.display='none';return;}
+        const g=wHit.graphic;
+        if(g.isAggregate){view.goTo({target:g.geometry,zoom:view.zoom+2});return;}
+        /* Match to spot list */
+        const lat=g.geometry?.latitude,lon=g.geometry?.longitude;
+        const spot=S.spots.find(s=>Math.abs(s.lat-lat)<0.0003&&Math.abs(s.lon-lon)<0.0003);
+        if(spot){selectSpot(spot);showPopupFromSpot(spot);return;}
+        /* Fallback: build minimal spot from graphic attrs */
+        const a=g.attributes||{};
+        const fbNameEN=(a.NAME_EN||'').trim()||(a.VENUE_NAME_EN||'').trim()||(a.LOCATION_EN||'').trim()||(a.SSID||'').trim()||'Wi-Fi #'+(a.OBJECTID||'?');
+        const fbNameZH=(a.NAME_TC||'').trim()||(a.VENUE_NAME_TC||'').trim()||(a.LOCATION_TC||'').trim()||fbNameEN;
+        showPopupFromSpot({
+          lat:lat||0,lon:lon||0,
+          nameEN:fbNameEN,
+          nameZH:fbNameZH,
+          districtEN:a.DISTRICT_EN||'',districtZH:a.DISTRICT_TC||'',
+          categoryEN:a.CATEGORY_EN||'',categoryZH:a.CATEGORY_TC||'',
+          locationEN:a.LOCATION_EN||'',locationZH:a.LOCATION_TC||'',
+          addressEN:a.ADDRESS_EN||'',addressZH:a.ADDRESS_TC||'',
+          orgEN:a.MANAGEMENT_ORG_EN||'',orgZH:a.MANAGEMENT_ORG_TC||'',
+          ssid:a.SSID||'',hotspotType:a.HOTSPOT_TYPE||'',
+          type:venueType(a.VENUE_NAME_EN||'',a.CATEGORY_EN||''),
+          toa:null,toaCls:'safe',
+        });
+      });
+    });
+
+    /* ══════════════════════════════════════════════════════════
+       refreshColoredLayer — rebuild TOA-coloured GraphicsLayer
+    ══════════════════════════════════════════════════════════ */
+    function refreshColoredLayer(){
+      const gl=S.gfxLayer;
+      if(!gl)return;
+      gl.removeAll();
+      if(!S.wifiOn||!S.spots.length)return;
+      const graphics=S.spots.map((spot,idx)=>{
+        const cls=spot.toaCls||'safe'; // default safe/teal if unset
+        const c=TOA_CLR[cls]||TOA_CLR.safe;
+        /* Dot sizes: warning=14px (big+glow), caution=9px, safe=5px */
+        const sz=cls==='warning'?14:cls==='caution'?9:5;
+        /* Glow outline for warning spots to pop against basemap */
+        const outlineW=cls==='warning'?2.5:1.5;
+        return new Graphic({
+          geometry:{type:'point',longitude:spot.lon,latitude:spot.lat,spatialReference:{wkid:4326}},
+          symbol:{
+            type:'simple-marker',color:c.fill,size:sz,
+            outline:{color:c.outline,width:outlineW},
+          },
+          attributes:{spotIdx:idx},
+        });
+      });
+      gl.addMany(graphics);
+    }
+
+    /* ══════════════════════════════════════════════════════════
+       PANEL — renderList, search, filter, pagination
+       All defined inside require() — guaranteed scope access.
+    ══════════════════════════════════════════════════════════ */
+    const ORD={warning:0,caution:1,safe:2,watch:2};  // watch merged with safe
+    function filtered(){
+      let pool=S.spots;
+      if(_tab==='warn')pool=pool.filter(s=>s.toaCls==='warning');
+      if(_tab==='caut')pool=pool.filter(s=>s.toaCls==='caution');
+      if(_q){
+        const q=_q.toLowerCase();
+        pool=pool.filter(s=>
+          (s.nameEN||'').toLowerCase().includes(q)||
+          (s.nameZH||'').includes(q)||
+          (s.districtEN||'').toLowerCase().includes(q)||
+          (s.districtZH||'').includes(q)||
+          (s.categoryEN||'').toLowerCase().includes(q)||
+          (s.ssid||'').toLowerCase().includes(q)
+        );
+      }
+      return [...pool].sort((a,b)=>{
+        const cd=ORD[a.toaCls]-ORD[b.toaCls];if(cd)return cd;
+        if(a.toa!=null&&b.toa!=null)return a.toa-b.toa;
+        return(a.nameEN||'').localeCompare(b.nameEN||'','en');
+      });
+    }
+
+    function renderList(){
+      const list=document.getElementById('spot-list');
+      const lmBtn=document.getElementById('lm-btn');
+      /* Remove old cards (preserve empty-st div) */
+      list.querySelectorAll('.scard').forEach(el=>el.remove());
+      lmBtn.classList.remove('show');
+
+      const pool=filtered();
+      const show=pool.slice(0,(_page+1)*PER);
+      document.getElementById('srch-cnt').textContent=
+        _q?pool.length.toLocaleString()+' results':'';
+
+      const empty=document.getElementById('empty-st');
+      if(!pool.length){
+        empty.style.display='flex';
+        empty.querySelector('.et').textContent=_q?tr('emptyNone'):'Loading hotspots…';
+        return;
+      }
+      empty.style.display='none';
+
+      const frag=document.createDocumentFragment();
+      show.forEach(spot=>{
+        const vc=BADGE[spot.type]||BADGE.other;
+        const nameMain=spot.nameEN;
+        const nameAlt =spot.nameZH||'';
+        const distTxt =spot.districtEN;
+        const locTxt  =spot.locationEN;
+        const toaTxt  =spot.toa!=null?fmtMin(spot.toa):'Clear';
+        const addrTxt =spot.addressEN||spot.locationEN||'';
+        const subParts=[distTxt,spot.ssid?'📶 '+spot.ssid:''].filter(Boolean);
+        const sub=subParts.join(' · ')||'';
+
+        const card=document.createElement('div');
+        card.className='scard '+spot.toaCls+(spot.toa===0?' raining-now':'');
+        /* TOA hero: split numeric value from unit for styling */
+        const toaRaw = spot.toa;
+        let toaNum='—', toaUnit='';
+        if(toaRaw===0){toaNum='NOW';toaUnit='raining';}
+        else if(toaRaw!=null&&toaRaw<60){toaNum=toaRaw;toaUnit='min';}
+        else if(toaRaw!=null){toaNum=Math.floor(toaRaw/60)+'h '+String(toaRaw%60).padStart(2,'0');toaUnit='away';}
+        else{toaNum='Clear';toaUnit='';}
+        card.innerHTML=
+          `<div class="sc-toa-col">
+            <div class="sc-toa">${toaNum}</div>
+            ${toaUnit?`<div class="sc-toa-unit">${toaUnit}</div>`:''}
+          </div>
+          <div class="sc-info">
+            <div class="sc-name">${nameMain||'—'}</div>
+            ${nameAlt&&nameAlt!==nameMain?`<div class="sc-name-alt">${nameAlt}</div>`:''}
+            ${addrTxt?`<div class="sc-addr">${addrTxt}</div>`:''}
+            <div class="sc-bot">
+              <span class="sc-badge ${vc[0]}">${vc[1]()}</span>
+              <span class="sc-fly" title="Show on map">📍</span>
+            </div>
+          </div>`;
+
+        /* Card body click → show popup + fly to spot */
+        card.addEventListener('click',e=>{
+          if(e.target.classList.contains('sc-fly')){
+            /* 📍 only: fly + pin, no popup */
+            selectSpot(spot, card);
+            if(S.view)S.view.goTo({center:[spot.lon,spot.lat],zoom:18},{duration:600});
+            return;
+          }
+          /* Full card click: pin + popup + fly */
+          selectSpot(spot, card);
+          showPopupFromSpot(spot);
+          if(S.view)S.view.goTo({center:[spot.lon,spot.lat],zoom:18},{duration:600});
+        });
+        frag.appendChild(card);
+      });
+      list.appendChild(frag);
+
+      if(pool.length>show.length){
+        const rem=pool.length-show.length;
+        lmBtn.textContent=`Load more (${rem.toLocaleString()} left) ↓`;
+        lmBtn.classList.add('show');
+      }
+    }
+    /* Expose renderList globally; keyboard nav wraps it below */
+    window._renderList=renderList;
+
+    /* Search wiring */
+    document.getElementById('srch').addEventListener('input',function(){
+      _q=this.value.trim().toLowerCase();_page=0;
+      document.getElementById('srch-clr').classList.toggle('show',_q.length>0);
+      renderList();
+    });
+    document.getElementById('srch-clr').addEventListener('click',()=>{
+      document.getElementById('srch').value='';_q='';_page=0;
+      document.getElementById('srch-clr').classList.remove('show');
+      renderList();
+    });
+    /* Tab filters */
+    ['all','warn'].forEach(tab=>{
+      document.getElementById('ft-'+tab).addEventListener('click',()=>{
+        _tab=tab;_page=0;
+        ['all','warn'].forEach(k=>document.getElementById('ft-'+k).classList.toggle('on',k===tab));
+        renderList();
+      });
+    });
+    /* Load more */
+    document.getElementById('lm-btn').addEventListener('click',()=>{
+      _page++;renderList();
+      document.getElementById('lm-btn').scrollIntoView({behavior:'smooth',block:'nearest'});
+    });
+
+    /* ══════════════════════════════════════════════════════════
+       loadAllSpots — queryObjectIds (no count limit) + batch
+    ══════════════════════════════════════════════════════════ */
+    async function loadAllSpots(){
+      const ppEl=document.getElementById('pp');
+      const ppTxt=document.getElementById('pp-txt');
+      const ppFill=document.getElementById('pp-fill');
+      ppEl.classList.remove('hidden');
+      ppTxt.textContent='Querying all hotspot IDs…';
+
+      let allOIDs=[];
+      try{
+        allOIDs=await wifiLayer.queryObjectIds({where:'1=1'});
+        console.log('[WiFi] queryObjectIds →',allOIDs.length,'OIDs');
+      }catch(e){
+        console.warn('[WiFi] OID query failed:',e.message,' — retrying in 2s');
+        try{
+          await new Promise(r=>setTimeout(r,2000));
+          allOIDs=await wifiLayer.queryObjectIds({where:'1=1'});
+        }catch(e2){
+          console.error('[WiFi] Retry failed:',e2.message);
+          ppTxt.textContent='⚠ CSDI unavailable';ppFill.style.width='100%';
+          setTimeout(()=>ppEl.classList.add('hidden'),3000);
+          return;
+        }
+      }
+
+      const total=allOIDs.length;
+      const tc=total.toLocaleString();
+      document.getElementById('lc-cnt').textContent=tc;
+      document.getElementById('pnl-sub').textContent=tc+' hotspots confirmed';
+
+      /* Batch fetch attributes + geometry */
+      const BATCH=500, allFeatures=[];
+      for(let i=0;i<allOIDs.length;i+=BATCH){
+        const batch=allOIDs.slice(i,i+BATCH);
+        const pct=Math.min(95,Math.round(i/allOIDs.length*100));
+        ppTxt.textContent='Loading '+allFeatures.length.toLocaleString()+'/'+tc;
+        ppFill.style.width=pct+'%';
+        try{
+          const res=await wifiLayer.queryFeatures({
+            objectIds:batch,
+            outFields:['*'],
+            returnGeometry:true,
+            outSpatialReference:{wkid:4326},
+          });
+          allFeatures.push(...res.features);
+        }catch(e){console.warn('[WiFi] Batch i='+i+' skip:',e.message);}
+        if(i+BATCH<allOIDs.length)await new Promise(r=>setTimeout(r,40));
+      }
+
+      ppTxt.textContent='✓ '+allFeatures.length.toLocaleString()+' hotspots loaded';
+      ppFill.style.width='100%';
+      console.log('[WiFi] Features loaded:',allFeatures.length);
+      buildSpots(allFeatures);
+      setTimeout(()=>ppEl.classList.add('hidden'),2500);
+    }
+
+    /* ── buildSpots — parse ArcGIS graphics into S.spots ── */
+    function buildSpots(features){
+      S.spots=[];
+      const seenOID=new Set();     // primary:  deduplicate by OBJECTID
+      const seenCoord=new Set();   // fallback: coordinate if OID absent
+      for(const f of features){
+        const geom=f.geometry; if(!geom)continue;
+        const lon=geom.longitude??geom.x;
+        const lat=geom.latitude??geom.y;
+        if(!isFinite(lat)||!isFinite(lon))continue;
+        if(lat<22.10||lat>22.60||lon<113.70||lon>114.55)continue;
+        const a=f.attributes||{};
+        // Deduplicate by OBJECTID — every server record is a unique hotspot
+        // even when multiple APs occupy the exact same coordinates.
+        // Coordinate-dedup was silently dropping ~490 real hotspots.
+        const oid=a.OBJECTID;
+        if(oid!=null){
+          if(seenOID.has(oid))continue;
+          seenOID.add(oid);
+        }else{
+          const key=lat.toFixed(5)+','+lon.toFixed(5);
+          if(seenCoord.has(key))continue;
+          seenCoord.add(key);
+        }
+        // Name resolution — CSDI Wi-Fi.HK uses NAME_EN/NAME_TC on newer data exports,
+        // VENUE_NAME_EN/VENUE_NAME_TC on older ones. Try all, then location, SSID, OID.
+        const nameEN=(a.NAME_EN||'').trim()
+          || (a.VENUE_NAME_EN||'').trim()
+          || (a.LOCATION_EN||'').trim()
+          || (a.SSID||'').trim()
+          || ('Wi-Fi #'+(oid||'?'));
+        const nameZH=(a.NAME_TC||'').trim()
+          || (a.VENUE_NAME_TC||'').trim()
+          || (a.LOCATION_TC||'').trim()
+          || nameEN;
+        S.spots.push({
+          lat,lon,
+          objectId:oid||null,
+          ssid:a.SSID||'',
+          nameEN, nameZH,
+          districtEN:a.DISTRICT_EN||'',   districtZH:a.DISTRICT_TC||'',
+          categoryEN:a.CATEGORY_EN||'',   categoryZH:a.CATEGORY_TC||'',
+          locationEN:a.LOCATION_EN||'',   locationZH:a.LOCATION_TC||'',
+          addressEN:a.ADDRESS_EN||'',     addressZH:a.ADDRESS_TC||'',
+          orgEN:a.MANAGEMENT_ORG_EN||'',  orgZH:a.MANAGEMENT_ORG_TC||'',
+          hotspotType:a.HOTSPOT_TYPE||'',
+          type:venueType(nameEN,a.CATEGORY_EN||''),
+          dist:haversine(HK_LAT,HK_LON,lat,lon),
+          inRange:haversine(HK_LAT,HK_LON,lat,lon)<=100,
+          toa:null, toaCls:'safe',  edgeKm:null, hitAngle:null,
+          _pt:new Point({longitude:lon,latitude:lat,spatialReference:{wkid:4326}}),
+        });
+      }
+      console.log('[WiFi] Built',S.spots.length,'unique spots');
+      const tc=S.spots.length.toLocaleString();
+      document.getElementById('lc-cnt').textContent=tc;
+      document.getElementById('pnl-sub').textContent=tc+' hotspots';
+      /* Paint all spots immediately (teal = safe/watch on first render).
+         Colours update to warning/caution once recalcTOA() runs. */
+      refreshColoredLayer();
+      renderList();
+      console.log('[Spots] refreshColoredLayer fired with',S.spots.length,'spots, motion=',!!S.motion);
+      recalcTOA(); // classify immediately — works correctly whether S.motion is set or null
+    }
+
+    /* ══════════════════════════════════════════════════════════
+       ECHO MOTION v2 — Wide-area tile fetch + Per-Spot Ray-Cast TOA
+       ─────────────────────────────────────────────────────────────
+       Design rationale (addressing 4 previous flaws):
+
+       [1] FAKE CENTROID REMOVED — Old code placed one synthetic storm
+           point 80 km upwind of HK centre and measured all spots to
+           that point. Completely wrong. Now every spot gets its own
+           ray cast directly from its pixel coordinates.
+
+       [2] RAY-CAST LEADING EDGE — For each spot we walk a ray from
+           the spot pixel TOWARDS the incoming storm direction, one
+           pixel at a time. The first echo pixel hit gives the exact
+           distance to the leading edge for that spot. This is the
+           same principle as SWIRLS "location-based rain forecast".
+
+       [3] 4×4 TILE GRID at ZOOM 7 — 1024×1024 px ≈ 1158 km × 1158 km.
+           Handles large MCS / typhoon rainbands (500–1000 km). If the
+           echo's leading edge is within 1158 km upwind the ray finds
+           it; beyond that the spot is classified watch (safe for now).
+           Previous 2×2 grid (580 km) was too small for large systems.
+
+       [4] QUALITY-WEIGHTED MOTION — Block matches are weighted by
+           inverse SSD (better matches count more). Two frame pairs are
+           averaged for temporal stability rather than one raw pair.
+
+       Pixel-to-geo math uses exact Web Mercator tile projection, so
+       lat/lon ↔ canvas pixel conversions are sub-pixel accurate.
+    ══════════════════════════════════════════════════════════ */
+
+    /* ── Tile geometry constants ────────────────────────────────
+       MZOOM 7 → 1 tile = 256 px; scale = 1.131 km/px at HK lat
+       4×4 grid → 1024 px → 1024 × 1.131 ≈ 1158 km coverage
+       HALF offsets centre the grid exactly on HK
+    ─────────────────────────────────────────────────────────── */
+    const MZOOM  = 7;   // tile zoom
+    const MNX    = 4;   // tiles across (x = longitude)
+    const MNY    = 4;   // tiles tall  (y = latitude)
+    const MBLK   = 32;  // block-match block size (px)
+    const MSRCH  = 20;  // block-match search radius (px) — ±20 px at 1.13 km/px = ±22.6 km max echo displacement per frame
+    /* ── Echo detection thresholds (two separate bars) ─────────────
+       ECHO_TRACK : alpha > 25 — any faint echo suitable for blockMatch
+                    velocity estimation (low bar: we want to track even
+                    light stratiform rain).
+       ECHO_WARN  : alpha > 75 — ≥2 mm/h rainfall (sub-2mm drizzle excluded)
+                    rayCast leading-edge detector (higher bar: reject PNG
+                    compression artifacts and sub-threshold drizzle haze
+                    that would otherwise generate false citizen warnings).
+    ─────────────────────────────────────────────────────────────── */
+    const ECHO_TRACK     = 25;  // for blockMatch pixel detection
+    const ECHO_WARN      = 75;  // ≥2 mm/h cutoff — sub-2mm drizzle/noise ignored for citizen warnings
+    const ECHO_CONFIRM_N = 3;   // 3 consecutive pixels — valid at ≥2mm/h threshold; rejects halos/noise
+    /* Ray fan: cast three rays at ±FAN_DEG offsets from the central incoming
+       direction and take the earliest (minimum) TOA.  Handles ±15° angular
+       uncertainty in the motion vector without requiring a more expensive
+       optical-flow algorithm. */
+    /* 5-ray fan ±30° — covers oblique approaches without false positives.
+       The minimum TOA across all rays wins; wider sweep handles echoes that
+       are not aligned exactly with the computed motion vector heading.     */
+const FAN_ANGLES     = [-30, -15, 0, 15, 30];  // degrees relative to incoming heading
+
+    /* ── loadTile — fetch one 256×256 RainViewer PNG tile ────── */
+    function loadTile(url){
+      return new Promise(res=>{
+        const img=new Image();
+        img.crossOrigin='anonymous';
+        const to=setTimeout(()=>res(null),8000);
+        img.onload=()=>{
+          clearTimeout(to);
+          try{
+            const cv=document.createElement('canvas');
+            cv.width=cv.height=256;
+            cv.getContext('2d').drawImage(img,0,0,256,256);
+            res(cv.getContext('2d').getImageData(0,0,256,256));
+          }catch{res(null);}
+        };
+        img.onerror=()=>{clearTimeout(to);res(null);};
+        img.src=url;
+      });
+    }
+
+    /* ── stitch — assemble NX×NY tiles into one ImageData ─────
+       tiles = flat array in row-major order [row0col0, row0col1, …]
+    ─────────────────────────────────────────────────────────── */
+    function stitch(tiles, nx, ny){
+      const SZ=256, W=SZ*nx, H=SZ*ny;
+      const out=new ImageData(W,H);
+      tiles.forEach((tile,i)=>{
+        if(!tile) return;
+        const col=i%nx, row=Math.floor(i/nx);
+        const ox=col*SZ, oy=row*SZ;
+        for(let y=0;y<SZ;y++){
+          for(let x=0;x<SZ;x++){
+            const si=(y*SZ+x)*4;
+            const di=((oy+y)*W+(ox+x))*4;
+            out.data[di  ]=tile.data[si  ];
+            out.data[di+1]=tile.data[si+1];
+            out.data[di+2]=tile.data[si+2];
+            out.data[di+3]=tile.data[si+3];
+          }
+        }
+      });
+      return out;
+    }
+
+    /* ── blockMatch — TREC-style SSD block matching ─────────────
+       Operates across the FULL canvas (not just the centre quarter).
+       Each matched block returns {dx, dy, w} where w = 1/SSD
+       (higher quality matches get higher weight in the median).
+       Only blocks with substantial echo (≥8% coverage) are used.
+    ─────────────────────────────────────────────────────────── */
+    function blockMatch(i1, i2, W, H){
+      const vecs=[], blk=MBLK, srch=MSRCH;
+      const minEcho=blk*blk*0.03; /* 3% — catches cells as small as ~10 km */
+      for(let by=0; by<H-blk; by+=blk){
+        for(let bx=0; bx<W-blk; bx+=blk){
+          /* Count echo pixels in this block of T1 */
+          let echoCnt=0;
+          for(let dy=0;dy<blk;dy++)
+            for(let dx=0;dx<blk;dx++)
+              if(i1.data[((by+dy)*W+(bx+dx))*4+3]>ECHO_TRACK) echoCnt++;
+          if(echoCnt<minEcho) continue; // skip near-empty blocks
+
+          /* Search for best-matching block in T2 */
+          let bestSSD=Infinity, bdx=0, bdy=0;
+          for(let sdy=-srch; sdy<=srch; sdy++){
+            for(let sdx=-srch; sdx<=srch; sdx++){
+              const ny=by+sdy, nx=bx+sdx;
+              if(ny<0||nx<0||ny+blk>H||nx+blk>W) continue;
+              let ssd=0;
+              for(let dy=0;dy<blk;dy++){
+                for(let dx=0;dx<blk;dx++){
+                  const p1=((by+dy)*W+(bx+dx))*4;
+                  const p2=((ny+dy)*W+(nx+dx))*4;
+                  /* Use alpha-weighted luminance for matching */
+                  const a1=i1.data[p1+3]/255, a2=i2.data[p2+3]/255;
+                  const l1=(i1.data[p1]*.299+i1.data[p1+1]*.587+i1.data[p1+2]*.114)/255*a1;
+                  const l2=(i2.data[p2]*.299+i2.data[p2+1]*.587+i2.data[p2+2]*.114)/255*a2;
+                  ssd+=(l1-l2)**2;
+                }
+              }
+              if(ssd<bestSSD){bestSSD=ssd;bdx=sdx;bdy=sdy;}
+            }
+          }
+          /* Accept if match quality is good AND there is non-zero displacement */
+          const normSSD=bestSSD/(blk*blk);
+          if(normSSD<0.10 && (bdx!==0||bdy!==0)){
+            vecs.push({dx:bdx, dy:bdy, w:1/(normSSD+1e-6)});
+          }
+        }
+      }
+      return vecs;
+    }
+
+    /* ── weightedMedian — quality-weighted median displacement ──
+       Sorts values, accumulates weights, returns value where
+       cumulative weight crosses the 50% mark.
+    ─────────────────────────────────────────────────────────── */
+    function weightedMedian(vals, weights){
+      if(!vals.length) return 0;
+      const pairs=vals.map((v,i)=>({v,w:weights[i]})).sort((a,b)=>a.v-b.v);
+      const total=pairs.reduce((s,p)=>s+p.w,0);
+      let cum=0;
+      for(const p of pairs){
+        cum+=p.w;
+        if(cum>=total/2) return p.v;
+      }
+      return pairs[pairs.length-1].v;
+    }
+
+    /* ── latLonToGlobalPx — exact Web Mercator projection ────────
+       Returns global pixel coordinates (gx, gy) at the given zoom.
+       These match RainViewer's tile coordinate system exactly.
+       gx = tile_x * 256 + pixel_offset_x
+    ─────────────────────────────────────────────────────────── */
+    function latLonToGlobalPx(lat, lon, zoom){
+      const n=1<<zoom;
+      const gx=((lon+180)/360)*n*256;
+      const r=lat*DEG;
+      const gy=(1-Math.log(Math.tan(r)+1/Math.cos(r))/Math.PI)/2*n*256;
+      return{gx, gy};
+    }
+
+    /* ── echoAt — sample whether a pixel has trackable echo (ECHO_TRACK) ── */
+    function echoAt(img, px, py, W, H){
+      const ix=Math.round(px), iy=Math.round(py);
+      if(ix<0||iy<0||ix>=W||iy>=H) return false;
+      return img.data[(iy*W+ix)*4+3]>ECHO_TRACK;
+    }
+
+    /* ── echoWarn — sample whether a pixel has meaningful rainfall (ECHO_WARN) ─
+       Used exclusively by rayCastTOA for leading-edge detection.
+       Higher bar than echoAt to reject PNG compression halos and light fog. */
+    function echoWarn(img, px, py, W, H){
+      const ix=Math.round(px), iy=Math.round(py);
+      if(ix<0||iy<0||ix>=W||iy>=H) return false;
+      return img.data[(iy*W+ix)*4+3]>ECHO_WARN;
+    }
+
+    /* ══════════════════════════════════════════════════════════
+       computeMotion v2
+       ─────────────────────────────────────────────────────────
+       1. Builds 4×4 tile grid centred on HK (1024×1024 px)
+       2. Fetches T_prev and T_now (two most recent frames)
+       3. Runs quality-weighted block-match on both canvas pairs
+       4. If ≥3 frames available, also matches T_prev2→T_prev
+          and averages the two velocity estimates for stability
+       5. Returns motion object including:
+            .img        = T_now ImageData (for ray casting)
+            .originGx/y = top-left of canvas in global pixel space
+            .kmPx       = km per canvas pixel
+            .W, .H      = canvas dimensions (px)
+    ══════════════════════════════════════════════════════════ */
+    async function computeMotion(){
+      if(S.rvFrames.length<2||!S.rvHost) return null;
+      const zoom=MZOOM, nx=MNX, ny=MNY;
+
+      /* Centre the grid on HK */
+      const{x:cTx,y:cTy}=tileXY(HK_LAT,HK_LON,zoom);
+      const originTx=cTx-Math.floor(nx/2);
+      const originTy=cTy-Math.floor(ny/2);
+
+      /* Build flat tile list [row0col0, row0col1, …] */
+      const tileList=[];
+      for(let ty=originTy;ty<originTy+ny;ty++)
+        for(let tx=originTx;tx<originTx+nx;tx++)
+          tileList.push({tx,ty});
+
+      const mk=(frame,g)=>
+        `${S.rvHost}${frame.path}/256/${zoom}/${g.tx}/${g.ty}/${RV_COLOR}/${RV_OPT}.png`;
+
+      /* Frame indices — use last 3 if available */
+      const nf=S.rvFrames.length;
+      const fNow =S.rvFrames[nf-1];
+      const fPrev =S.rvFrames[nf-2];
+      const fPrev2=nf>=3?S.rvFrames[nf-3]:null;
+
+      /* Fetch T_prev and T_now in parallel */
+      const[rawPrev,rawNow]=await Promise.all([
+        Promise.all(tileList.map(g=>loadTile(mk(fPrev,g)))),
+        Promise.all(tileList.map(g=>loadTile(mk(fNow,g)))),
+      ]);
+      if(rawNow.some(t=>!t)||rawPrev.some(t=>!t)) return null;
+
+      const W=nx*256, H=ny*256;
+      const imgPrev=stitch(rawPrev,nx,ny);
+      const imgNow =stitch(rawNow, nx,ny);
+
+      /* Primary block match: T_prev → T_now */
+      const vecs1=blockMatch(imgPrev,imgNow,W,H);
+
+      /* ── Small-echo fallback: if blockMatch finds < 2 vectors the echo is
+         too small for velocity estimation. Scan for any bright echo cluster
+         within 100 km of HK centre and synthesise a motion model from its
+         bearing alone, using the last known speed or a 40 km/h default.  ── */
+      if(vecs1.length<2){
+        const cenX=Math.floor(nx/2)*256, cenY=Math.floor(ny/2)*256;
+        const maxPx=Math.round(100/((40075*Math.cos(HK_LAT*Math.PI/180))/((1<<zoom)*256)));
+        let sumX=0,sumY=0,cnt=0;
+        for(let py=Math.max(0,cenY-maxPx);py<Math.min(H,cenY+maxPx);py+=2)
+          for(let px=Math.max(0,cenX-maxPx);px<Math.min(W,cenX+maxPx);px+=2){
+            if(imgNow.data[(py*W+px)*4+3]>ECHO_TRACK){sumX+=px;sumY+=py;cnt++;}
+          }
+        if(cnt<4) return null; // truly no echo
+        const ecX=sumX/cnt, ecY=sumY/cnt;
+        const dxPx=cenX-ecX, dyPx=cenY-ecY;
+        const kmPxLocal=(40075*Math.cos(HK_LAT*Math.PI/180))/((1<<zoom)*256);
+        const distKm=Math.sqrt(dxPx**2+dyPx**2)*kmPxLocal;
+        if(distKm>100) return null;
+        /* Heading: direction the echo is moving = toward HK = bearing from echo to centre */
+        const hdg=((Math.atan2(dxPx,-dyPx)*(180/Math.PI))+360)%360;
+        const spd=S.motion?.speedKmh||40; // reuse last known speed or default 40 km/h
+        return{
+          speedKmh:spd, headingDeg:Math.round(hdg), kmPx:kmPxLocal,
+          img:imgNow, originGx, originGy, W, H, zoom,
+          blocks:cnt, confidence:'Low',
+          smallEcho:true, centroidDistKm:Math.round(distKm),
+        };
+      } /* 2 vectors enough for small isolated cells */
+      const dt1H=(fNow.time-fPrev.time)/3600;
+
+      /* Secondary match (T_prev2 → T_prev) if 3 frames available */
+      let allDx=[], allDy=[], allW=[];
+      let dt2H=dt1H;
+      if(fPrev2){
+        const rawPrev2=await Promise.all(tileList.map(g=>loadTile(mk(fPrev2,g))));
+        if(!rawPrev2.some(t=>!t)){
+          const imgPrev2=stitch(rawPrev2,nx,ny);
+          const vecs2=blockMatch(imgPrev2,imgPrev,W,H);
+          dt2H=(fPrev.time-fPrev2.time)/3600;
+          /* Normalise both vector sets to km/h before combining */
+          const kmPx=(40075*Math.cos(HK_LAT*DEG))/((1<<zoom)*256);
+          // Convert px displacement → km/h then back → normalised px for weighted median
+          // Simpler: weight-combine raw px vectors (both share same kmPx)
+          // v1 represents dt1H, v2 represents dt2H — both in px/frame
+          // We want km/h → divide by dtH. But we median first then convert.
+          // Just pool both sets with their weights:
+          vecs2.forEach(v=>{allDx.push(v.dx);allDy.push(v.dy);allW.push(v.w);});
+          // Adjust v2 to same "speed" basis as v1 by scaling by dt1H/dt2H
+          // Actually they're px/frame not km/h, so scale to unify time base:
+          const scale=dt1H/dt2H;
+          allDx=allDx.map(d=>d*scale);
+          allDy=allDy.map(d=>d*scale);
+        }
+      }
+      /* Always include primary vectors */
+      vecs1.forEach(v=>{allDx.push(v.dx);allDy.push(v.dy);allW.push(v.w);});
+
+      /* Quality-weighted median displacement (px per dt1H) */
+      const mdx=weightedMedian(allDx,allW);
+      const mdy=weightedMedian(allDy,allW);
+
+      /* Convert to meteorological quantities */
+      const kmPx=(40075*Math.cos(HK_LAT*DEG))/((1<<zoom)*256);
+      const speedKmh=Math.round(Math.sqrt(mdx**2+mdy**2)*kmPx/dt1H);
+      /* Heading: atan2(dx, -dy) because image y increases southward */
+      const headingDeg=Math.round(((Math.atan2(mdx,-mdy)/DEG)+360)%360);
+
+      /* Canvas origin in global pixel space */
+      const originGx=originTx*256;
+      const originGy=originTy*256;
+
+      return{
+        speedKmh,
+        headingDeg,
+        kmPx,
+        img:imgNow,     // T_now canvas — used for per-spot ray casting
+        originGx,
+        originGy,
+        W, H,
+        zoom,
+        blocks:vecs1.length,
+        confidence:vecs1.length>=25?'High':vecs1.length>=8?'Medium':'Low',
+        
+      };
+    }
+
+    /* ══════════════════════════════════════════════════════════
+       rayCastTOA v3 — per-spot leading-edge detection
+       ─────────────────────────────────────────────────────────
+       ALGORITHM
+       ─────────
+       1. Project the hotspot's lat/lon into the composite radar
+          canvas using exact Web Mercator math.
+
+       2. "Already raining" check: sample a 3×3 pixel neighbourhood
+          at the spot. If ≥3 of the 9 pixels exceed ECHO_TRACK,
+          the spot is currently inside the echo → return 0 (raining now).
+          Using a neighbourhood instead of a single pixel prevents
+          isolated background pixels from triggering false "raining" reads.
+
+       3. Multi-ray fan: cast three rays at FAN_ANGLES offsets
+          (−15°, 0°, +15°) from the incoming storm direction.
+          Take the MINIMUM TOA across all rays.  Rationale:
+            • Motion vectors have ≈±15° angular uncertainty from
+              a finite block-match grid.
+            • The minimum-TOA ray finds the nearest leading-edge
+              fragment regardless of slight directional error.
+            • A false minimum is prevented by step 4.
+
+       4. Confirmed leading edge: require ECHO_CONFIRM_N (=3)
+          consecutive pixels above ECHO_WARN on a ray before
+          declaring the leading edge.  The declared distance is
+          back-adjusted to the FIRST pixel of the run.
+          Benefit: eliminates PNG compression halo artifacts
+          (typically 1–2 semi-transparent pixels at tile seams)
+          that would otherwise generate spurious 0-minute warnings.
+
+       5. Returns:
+            null  — no echo found on any ray (watch / safe)
+            0     — already inside echo (raining now, warning)
+            n>0   — TOA in minutes (location-specific)
+
+       COVERAGE NOTE
+       ─────────────
+       The composite canvas at zoom=7 with 4×4 tiles covers
+       ≈1158 km × 1158 km centred on Hong Kong.  Any leading edge
+       within ≈580 km of HK is detected.  At 100 km/h storm speed
+       that is 5.8 h lead time — well beyond the operational 2-hour
+       nowcast window.  Large MCS systems (e.g., typhoon outer
+       rainbands) that span 600–1000 km are fully covered because
+       the canvas is wider than the system.  If a truly monstrous
+       system fills the entire canvas the spot returns 0 (raining
+       now), which is physically correct.
+    ══════════════════════════════════════════════════════════ */
+    function rayCastTOA(lat, lon, m){
+      const{img,W,H,speedKmh,headingDeg,kmPx,originGx,originGy,zoom}=m;
+
+      /* ── Step 1: project spot to canvas pixel ── */
+      const{gx,gy}=latLonToGlobalPx(lat,lon,zoom);
+      const spx=gx-originGx, spy=gy-originGy;
+
+      /* Spot must lie within the composite canvas */
+      if(spx<0||spy<0||spx>=W||spy>=H) return null;
+
+      /* ── Step 2: 3×3 neighbourhood "already raining" check ── */
+      let rainCnt=0;
+      for(let dy=-1;dy<=1;dy++)
+        for(let dx=-1;dx<=1;dx++)
+          if(echoAt(img, spx+dx, spy+dy, W, H)) rainCnt++;
+      if(rainCnt>=3) return {toa:0, edgeKm:0, hitAngle:0};   // inside echo
+
+      /* ── Steps 3+4: multi-ray fan with confirmed leading edge ── */
+      const inHdgBase=((headingDeg+180)%360);
+      /* ── Range cap: only detect echoes within 100 km ──────────────────
+         Beyond 100 km the TOA exceeds any actionable warning window and
+         these distant echoes frequently produce false positives.
+         At zoom 7 HK latitude: 100 km ≈ 88 canvas pixels.               */
+      const maxSteps=Math.round(100/kmPx);   // 100 km in canvas pixels
+      let best=null; // {toa, edgeKm, hitAngle}
+
+      for(const fanOff of FAN_ANGLES){
+        const inHdgRad=((inHdgBase+fanOff+360)%360)*DEG;
+        const rdx= Math.sin(inHdgRad);
+        const rdy=-Math.cos(inHdgRad);
+
+        let echoRun=0;
+        for(let s=1;s<=maxSteps;s++){
+          const px=spx+rdx*s;
+          const py=spy+rdy*s;
+          if(px<0||py<0||px>=W||py>=H) break;
+
+          if(echoWarn(img,px,py,W,H)){
+            echoRun++;
+            if(echoRun>=ECHO_CONFIRM_N){
+              const edgeStep=s-(ECHO_CONFIRM_N-1);
+              const edgeKm=Math.round(edgeStep*kmPx*10)/10;  // 1 decimal km
+              const toa=Math.max(1, Math.round((edgeStep*kmPx)/speedKmh*60));
+              if(!best || toa<best.toa){
+                best={toa, edgeKm, hitAngle:(inHdgBase+fanOff+360)%360};
+              }
+              break;
+            }
+          }else{
+            echoRun=0;
+          }
+        }
+      }
+
+      return best; // null = no echo; {toa,edgeKm,hitAngle} otherwise
+    }
+
+    /* ══════════════════════════════════════════════════════════
+       recalcTOA v3 — per-spot ray-cast TOA with full state handling
+       ─────────────────────────────────────────────────────────
+       State machine per spot:
+         toa = null  → watch   (no echo on upwind ray / off-canvas)
+         toa = 0     → warning (inside echo — raining now)
+         toa ≤ 20    → warning (rain arrives in ≤20 min)
+         toa ≤ 45    → caution (rain arrives in 21–45 min)
+         toa  > 45   → safe    (rain >45 min away)
+
+       Low-confidence guard: if motion confidence is 'Low' (< 8
+       matched blocks) the velocity estimate is unreliable.  We
+       still run ray-casts (suppressing them could mask real rain)
+       but the echo card shows a low-confidence indicator so
+       operators can interpret the results appropriately.
+    ══════════════════════════════════════════════════════════ */
+    function recalcTOA(){
+      const m=S.motion;
+      let nW=0, nC=0, nRaining=0;
+
+      if(!m||m.speedKmh<2){
+        /* No significant echo motion — reset all spots to watch */
+        S.spots.forEach(s=>{s.toa=null;s.toaCls='safe';});  // no motion → all clear
+      }else{
+        S.spots.forEach(s=>{
+          const res=rayCastTOA(s.lat,s.lon,m);
+
+          if(res===null){
+            /* No echo on upwind ray within canvas → watching */
+            s.toa=null; s.toaCls='safe';
+            s.edgeKm=null; s.hitAngle=null;  // no echo within 100 km → clear
+
+          }else if(res.toa===0){
+            /* Spot is inside the current echo — already raining */
+            s.toa=0; s.toaCls='warning';
+            s.edgeKm=0; s.hitAngle=null;
+            nW++; nRaining++;
+
+          }else{
+            /* Echo detected at distance; classify by TOA */
+            s.toa=res.toa;
+            s.edgeKm=res.edgeKm;
+            s.hitAngle=res.hitAngle;
+            s.toaCls=res.toa<=20?'warning':res.toa<=45?'caution':'safe';
+            if(s.toaCls==='warning')      nW++;
+            else if(s.toaCls==='caution') nC++;
+          }
+        });
+      }
+
+      /* ── Update stat chips ── */
+      const nS=S.spots.filter(s=>s.toaCls==='safe').length;
+      document.getElementById('sb-warn').textContent=nW;
+      document.getElementById('sb-caut').textContent=nC;
+      document.getElementById('ps-safe').textContent=nS;
+      document.getElementById('ec-risk').textContent=(nW+nC).toLocaleString();
+
+      /* ── Echo card banner + pill ──────────────────────────────
+         Priority: danger > active > clear
+         Low-confidence: append indicator but keep danger if nW>0.
+      ── */
+      const bnr=document.getElementById('ec-bnr');
+      const lowConf=m&&m.confidence==='Low';
+      const confTag=lowConf?' ⚠ Low conf':'';
+
+      if(nW>0){
+        const rainingTxt=nRaining>0?` (${nRaining} raining)`:'';
+        bnr.className='ec-bnr dng';
+        bnr.textContent=tr('warnBnr',{n:nW})+rainingTxt+confTag;
+      }else if(m&&m.speedKmh>=2){
+        /* Echo moving but no spots yet in warning range */
+        bnr.className='ec-bnr act';
+        bnr.textContent=tr('activeBnr',{spd:m.speedKmh,dir:dirLabel(m.headingDeg)})+confTag;
+        pill.className='t-metric caution';
+      }else{
+        bnr.className='ec-bnr clr';
+        bnr.textContent=tr('clearBanner');
+        pill.className='t-metric';
+      }
+
+      /* ── Trigger map + list refresh ── */
+      refreshColoredLayer();
+      renderList();
+      updateAlertBanner(nW, nC, S.motion);
+
+      /* ── Push TOA results to AGOL hosted layer (Dashboard feed) ── */
+      pushTOAToAGOL().catch(e => console.warn('[pushTOA]', e));
+    }
+    window._motion=null;
+
+    /* ══════════════════════════════════════════════════════════
+       updateEchoUI — update echo motion card fields + pill state
+       ─────────────────────────────────────────────────────────
+       Responsibility split with recalcTOA:
+         updateEchoUI → compass, speed, direction, confidence,
+                         pill text/class, ec-bnr for clear/active
+         recalcTOA    → ec-bnr upgraded to 'dng' if nW > 0,
+                         pill upgraded to 'warn' if nW > 0
+       updateEchoUI is always called BEFORE recalcTOA, so any
+       danger-level overrides from recalcTOA always win.
+    ══════════════════════════════════════════════════════════ */
+    function updateEchoUI(m){
+      const bnr  = document.getElementById('ec-bnr');
+
+      if(!m || m.speedKmh < 2){
+        /* No significant echo motion */
+        document.getElementById('ec-spd').textContent = tr('noEcho');
+        document.getElementById('ec-spd').className   = 'ec-v c-mute';
+        document.getElementById('ec-dir').textContent = '—';
+        document.getElementById('ec-conf').textContent= '—';
+        document.getElementById('hdg-val').textContent = 'Clear';
+        document.getElementById('hdg-dir').textContent = 'No echo';
+        document.getElementById('arrow-g').setAttribute('transform','rotate(0 20 20)');
+        bnr.className   = 'ec-bnr clr';
+        bnr.textContent = tr('clearBanner');
+        updateAlertBanner(0, 0, null);
+      }else{
+        const dir = dirLabel(m.headingDeg);
+        const hdg = String(m.headingDeg).padStart(3,'0');
+        const confLabel = m.confidence + ' (' + m.blocks + ')';
+        const lowConf   = m.confidence === 'Low';
+        document.getElementById('ec-spd').textContent  = m.speedKmh + ' km/h';
+        document.getElementById('ec-spd').className    = 'ec-v c-amb';
+        document.getElementById('ec-dir').textContent  = hdg + '° ' + dir;
+        document.getElementById('ec-conf').textContent = confLabel;
+        document.getElementById('ec-conf').className   = 'ec-v ' + (lowConf?'c-red':'c-jade');
+        document.getElementById('hdg-val').textContent = hdg + '°';
+        document.getElementById('hdg-dir').textContent = tr('movDir',{dir});
+        document.getElementById('arrow-g').setAttribute('transform',`rotate(${m.headingDeg} 20 20)`);
+        /* Banner: active state (recalcTOA will upgrade to 'dng' if needed) */
+        bnr.className   = 'ec-bnr act' + (lowConf ? ' low-conf' : '');
+        bnr.textContent = tr('activeBnr',{spd:m.speedKmh,dir}) + (lowConf ? ' ⚠ Low conf' : '');
+      }
+    }
+    window._updateEchoUI = updateEchoUI;
+
+
+    /* ══════════════════════════════════════════════════════════
+       updateAlertBanner — topbar threat-level state machine
+       ─────────────────────────────────────────────────────────
+       Three states:
+         clear   — no echo / speed < 2 km/h
+         active  — echo moving, no spots in warning range yet
+         warning — ≥1 spot in warning (≤20 min) range
+       Updates topbar class, icon, text, and sub-text.
+    ══════════════════════════════════════════════════════════ */
+    function updateAlertBanner(nW, nC, m){
+      const tb   = document.getElementById('topbar');
+      const icon = document.getElementById('alert-icon');
+      const text = document.getElementById('alert-text');
+      const sub  = document.getElementById('alert-sub');
+      const now  = new Date().toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Hong_Kong'});
+
+      tb.classList.remove('state-clear','state-active','state-warning');
+
+      if(nW > 0){
+        tb.classList.add('state-warning');
+        icon.textContent = '🚨';
+        const raining = S.spots.filter(s=>s.toa===0).length;
+        const minToa  = S.spots.filter(s=>s.toaCls==='warning'&&s.toa>0).reduce((mn,s)=>Math.min(mn,s.toa),999);
+        if(raining > 0){
+          text.textContent = `RAINING NOW at ${raining} spot${raining>1?'s':''} — Seek shelter immediately`;
+        } else {
+          text.textContent = `RAIN IN ${minToa} MIN — ${nW} spot${nW>1?'s':''} impacted${nC>0?' · '+nC+' on caution':''}`;
+        }
+      } else if(m && m.speedKmh >= 2){
+        tb.classList.add('state-active');
+        icon.textContent = '⚡';
+        text.textContent = `Echo moving ${dirLabel(m.headingDeg)} at ${m.speedKmh} km/h${nC>0?' — '+nC+' spot'+(nC>1?'s':'')+' on caution':''}`;
+      } else {
+        tb.classList.add('state-clear');
+        icon.textContent = '✓';
+        text.textContent = 'All Clear — No significant echo within 100 km';
+      }
+      sub.textContent = 'Updated ' + now;
+
+      /* Pulse warning count in panel if non-zero */
+      const warnCol = document.getElementById('stat-warn-col');
+      if(warnCol){
+        if(nW > 0) warnCol.classList.add('has-warn');
+        else       warnCol.classList.remove('has-warn');
+      }
+    }
+
+        /* drawStormArrow removed — echo arrow not shown */
+
+    /* ══════════════════════════════════════════════════════════
+       AGOL TOKEN — retrieve current session token
+       Requires OAuthInfo + IdentityManager to be registered.
+       Returns null if not signed in (writes are skipped silently).
+    ══════════════════════════════════════════════════════════ */
+    async function getAGOLToken(){
+      try{
+        const cred=await IdentityManager.getCredential(
+          ARCGIS_CONFIG.PORTAL_URL+'/sharing'
+        );
+        return cred.token;
+      }catch{
+        console.warn('[Auth] No token — pushTOAToAGOL skipped');
+        return null;
+      }
+    }
+
+    /* ══════════════════════════════════════════════════════════
+       pushTOAToAGOL — write S.spots TOA results to hosted layer
+       ─────────────────────────────────────────────────────────
+       Called automatically at the end of every recalcTOA() run
+       (every 10 min). Uses applyEdits UPDATES — requires the
+       layer to already be populated by populateTOALayer() first.
+       Batches 200 features per request to respect AGOL rate limits.
+    ══════════════════════════════════════════════════════════ */
+    async function pushTOAToAGOL(){
+      if(!S.spots.length)return;
+      const token=await getAGOLToken();
+      if(!token)return;
+
+      const BATCH=200;
+      const now=new Date().toISOString();
+
+      for(let i=0;i<S.spots.length;i+=BATCH){
+        const updates=S.spots.slice(i,i+BATCH)
+          .filter(s=>s.objectId!=null)
+          .map(s=>({
+            attributes:{
+              OBJECTID:    s.objectId,
+              TOA_MINUTES: s.toa??-1,
+              TOA_STATUS:  s.toaCls,
+              EDGE_KM:     s.edgeKm??-1,
+              UPDATED_UTC: now,
+            }
+          }));
+
+        if(!updates.length)continue;
+
+        await fetch(ARCGIS_CONFIG.TOA_LAYER_URL+'/applyEdits',{
+          method:'POST',
+          headers:{'Content-Type':'application/x-www-form-urlencoded'},
+          body:new URLSearchParams({
+            f:'json',token,
+            updates:JSON.stringify(updates),
+          }),
+        }).catch(e=>console.warn('[pushTOA] batch',i,e.message));
+
+        await new Promise(r=>setTimeout(r,50));
+      }
+      console.log('[pushTOA] Done —',S.spots.length,'spots pushed to AGOL');
+    }
+
+    /* ══════════════════════════════════════════════════════════
+       populateTOALayer — ONE-TIME initial population
+       ─────────────────────────────────────────────────────────
+       Run ONCE from DevTools console after first successful
+       loadAllSpots() to seed the hosted FeatureLayer with
+       geometry + attributes. After this, pushTOAToAGOL()
+       handles all future updates via applyEdits UPDATES.
+       Usage: populateTOALayer()
+    ══════════════════════════════════════════════════════════ */
+    async function populateTOALayer(){
+      const token=await getAGOLToken();
+      if(!token){console.error('[populate] Not signed in');return;}
+
+      const BATCH=200;
+      for(let i=0;i<S.spots.length;i+=BATCH){
+        const adds=S.spots.slice(i,i+BATCH).map(s=>({
+          geometry:{
+            x:s.lon,y:s.lat,
+            spatialReference:{wkid:4326}
+          },
+          attributes:{
+            SSID:        s.ssid,
+            NAME_EN:     s.nameEN,
+            DISTRICT_EN: s.districtEN,
+            CATEGORY_EN: s.categoryEN,
+            TOA_MINUTES: s.toa??-1,
+            TOA_STATUS:  s.toaCls,
+            EDGE_KM:     s.edgeKm??-1,
+            UPDATED_UTC: new Date().toISOString(),
+          }
+        }));
+
+        const res=await fetch(ARCGIS_CONFIG.TOA_LAYER_URL+'/applyEdits',{
+          method:'POST',
+          headers:{'Content-Type':'application/x-www-form-urlencoded'},
+          body:new URLSearchParams({
+            f:'json',token,
+            adds:JSON.stringify(adds),
+          }),
+        }).then(r=>r.json());
+
+        console.log('[populate] Batch',i+'–'+(i+BATCH)+':',
+          res.addResults?.filter(r=>r.success).length,'added,',
+          res.addResults?.filter(r=>!r.success).length,'failed'
+        );
+        await new Promise(r=>setTimeout(r,80));
+      }
+      console.log('[populate] Complete —',S.spots.length,'features in layer');
+    }
+    window.populateTOALayer=populateTOALayer; // expose to DevTools console
+
+    /* ── Boot sequence ── */
+    async function boot(){
+      prog(5,'Initialising map…');
+      await view.when();
+      /* Add our layers on top of the WebMap after it's fully loaded */
+      map.add(S.wifiLayer);  // query + click detection (opacity:0 — invisible)
+      map.add(S.gfxLayer);   // coloured TOA dot graphics — this is what users see
+      prog(15,'Map ready ✓');
+      await updateRadar();
+      prog(30,'Radar ready ✓');
+      /* Start spot loading async (don't block the loading screen).
+         loadAllSpots → buildSpots → recalcTOA.  If spots finish BEFORE
+         computeMotion returns, that first recalcTOA runs with S.motion=null
+         (all spots get 'watch'). The explicit recalcTOA() call below fixes
+         those spots once motion is available. */
+      loadAllSpots().catch(e=>console.error('loadAllSpots:',e));
+      /* Echo motion analysis (4×4 tile grid → optical flow → ray-cast ready) */
+      prog(45,'Analysing echo motion…');
+      const m=await computeMotion().catch(()=>null);
+      S.motion=m; window._motion=m;
+      prog(55,'Echo analysis complete ✓');
+      updateEchoUI(m);
+      document.getElementById('ec-upd').textContent=new Date().toLocaleTimeString('en-HK',{hour12:false,timeZone:'Asia/Hong_Kong'});
+      /* ── Race-condition fix ──────────────────────────────────────
+         If spots finished loading before computeMotion returned, they
+         were classified against null motion (all 'watch'). Re-classify
+         them now that we have real motion data.
+         If spots haven't loaded yet, buildSpots() → recalcTOA() will
+         naturally use the S.motion we just set above.
+      ─────────────────────────────────────────────────────────── */
+      if(S.spots.length) recalcTOA();
+      prog(100,'System ready ✓');
+      hideLoading();
+      /* Auto-refresh every 10 min */
+      setInterval(async()=>{
+        await updateRadar();
+        const m2=await computeMotion().catch(()=>null);
+        S.motion=m2; window._motion=m2;
+        updateEchoUI(m2);
+        document.getElementById('ec-upd').textContent=new Date().toLocaleTimeString('en-HK',{hour12:false,timeZone:'Asia/Hong_Kong'});
+        if(S.spots.length)recalcTOA();
+      },10*60*1000);
+    }
+
+    boot().catch(e=>{
+      console.error('Boot error:',e);
+      document.getElementById('ld-msg').textContent='⚠ Boot error: '+e.message;
+    });
+
+  }); /* end require() */
+}); /* end window.load */
+
+</script>
+</body>
+</html>
